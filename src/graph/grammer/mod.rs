@@ -1,0 +1,30 @@
+pub(crate) mod cpp;
+pub(crate) mod java;
+
+use tree_sitter::{Language, Node};
+
+use crate::graph::{Modifier, SymbolKind, Visibility, symbol::Generic};
+
+/// The Grammer trait abstracts the query language tokens
+pub(crate) trait Grammer {
+    fn declaration_nodes(&self) -> &'static [&'static str];
+    fn flatten_nodes(&self) -> &'static [&'static str];
+    fn to_symbolkind(&self, node: &Node,  content: &str) -> SymbolKind;
+    fn to_name<'a>(&self, node: &Node , content: &'a str) -> &'a str;
+    fn extract_declaration_attributes(&self, node: &Node, content: &str) -> (Visibility, Vec<Modifier>);
+    fn to_generics(&self, node: &Node, content: &str) -> Vec<Generic>;
+    fn gather_all_permits<'a>(&self, node: &Node, content: &'a str) -> Option<Vec<&'a str>> {
+        None
+    }
+    fn gather_all_inheritance<'a>(&self, node: &Node, content: &'a str) -> Option<Vec<&'a str>> {
+        None
+    }
+    fn language(&self) -> Language;
+    fn apply_visibility_change(
+        &self,
+        node: &Node,
+        content: &str,
+        scoped_vis: &mut Option<Visibility>,
+    ) {
+    }
+}
