@@ -10,16 +10,18 @@ pub(crate) struct Generic {
     pub(crate) bounds: Vec<String>,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct Parameter {
     pub(crate) type_specifier: String,
     pub(crate) modifiers: Vec<Modifier>,
     pub(crate) variadic: bool,
     pub(crate) name: String,
+    pub(crate) reference: bool,
+    pub(crate) pointer_depth: usize,
     pub(crate) default: Option<String>,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct Type {
     pub(crate) reference: bool,
     pub(crate) pointer_depth: usize,
@@ -37,23 +39,31 @@ impl<'a> From<(Node<'a>, &str)> for Type {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct MethodKind {
     pub(crate) value: String,
     pub(crate) params: Vec<Parameter>,
     pub(crate) return_type: Type,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
+pub(crate) struct Constructor {
+    pub(crate) value: String,
+    pub(crate) params: Vec<Parameter>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct FieldKind {
     pub(crate) value: String,
     pub(crate) dtype: Type,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) enum SymbolKind {
     Function,
     Method(MethodKind),
+    Destructor(String),
+    Constructor(Constructor),
 
     Class,
     Struct,
@@ -69,6 +79,8 @@ pub(crate) enum SymbolKind {
 
     Module,
     Namespace,
+
+    Root,
 
     #[default]
     Unknown,
@@ -113,7 +125,7 @@ impl From<&str> for Visibility {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Modifier {
     Static,
     Final,

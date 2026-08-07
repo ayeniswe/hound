@@ -1,6 +1,8 @@
 pub(crate) mod cpp;
 pub(crate) mod java;
 
+use std::collections::HashMap;
+
 use tree_sitter::{Language, Node};
 
 use crate::graph::{Modifier, SymbolKind, Visibility, symbol::Generic};
@@ -27,4 +29,5 @@ pub(crate) trait Grammer {
         scoped_vis: &mut Option<Visibility>,
     ) {
     }
+    fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String,String>);
 }

@@ -8,7 +8,7 @@ use crate::graph::{
     build::handle_query,
     grammer::Grammer,
     parser::LanguageParser,
-    symbol::{FieldKind, Generic, MethodKind, Parameter, Type},
+    symbol::{Constructor, FieldKind, Generic, MethodKind, Parameter, Type},
 };
 
 fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
@@ -54,7 +54,9 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
                 type_specifier,
                 modifiers,
                 variadic: child.kind() == "spread_parameter",
-                default: None
+                default: None,
+                reference: bool::default(),
+                pointer_depth: usize::default(),
             }
         })
         .collect()
@@ -71,6 +73,7 @@ impl Grammer for Java {
             "interface_declaration",
             "method_declaration",
             "field_declaration",
+            "constructor_declaration",
             "enum_declaration",
         ]
     }
@@ -79,7 +82,6 @@ impl Grammer for Java {
     }
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind {
         match node.kind() {
-            "class_declaration" => SymbolKind::Class,
             "method_declaration" => node
                 .child_by_field_name("type")
                 .map(|ty| {
@@ -106,7 +108,11 @@ impl Grammer for Java {
                     })
                 })
                 .unwrap_or(SymbolKind::Unknown),
-
+            "constructor_declaration" => SymbolKind::Constructor(Constructor {
+                value: "".into(),
+                params: extract_parameters(node.child_by_field_name("parameters"), content),
+            }),
+            "class_declaration" => SymbolKind::Class,
             _ => SymbolKind::Unknown,
         }
     }
@@ -211,6 +217,22 @@ impl Grammer for Java {
             })
             .map(|n| &content[n.start_byte()..n.end_byte()])
             .unwrap_or_default()
+    }
+
+    fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>) {
+        let exceptions: Vec<&str> = node
+            .named_children(&mut node.walk())
+            .find(|n| n.kind() == "throws")
+            .map(|n| {
+                n.named_children(&mut n.walk())
+                    .map(|n| &content[n.start_byte()..n.end_byte()])
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !exceptions.is_empty() {
+            metadata.insert("throws".into(), exceptions.join(","));
+        }
     }
 }
 

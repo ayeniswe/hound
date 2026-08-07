@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use thiserror::Error;
 use tree_sitter::Node;
 
@@ -15,11 +17,12 @@ fn sanitize_template_names(value: &str) -> &str {
         .unwrap_or(&value)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct DeclaratorInfo<'tree> {
     parameters: Option<Node<'tree>>,
     pointer_depth: usize,
     has_reference: bool,
+    is_destructor: bool,
 }
 
 fn analyze_declarator<'tree>(node: Node<'tree>, info: &mut DeclaratorInfo<'tree>) {
@@ -27,14 +30,19 @@ fn analyze_declarator<'tree>(node: Node<'tree>, info: &mut DeclaratorInfo<'tree>
         info.parameters = Some(params);
     }
 
-    match node.kind() {
-        "pointer_declarator" => {
-            info.pointer_depth += 1;
+    if info.parameters.is_none() {
+        match node.kind() {
+            "pointer_declarator" => {
+                info.pointer_depth += 1;
+            }
+            "reference_declarator" => {
+                info.has_reference = true;
+            }
+            "destructor_name" => {
+                info.is_destructor = true;
+            }
+            _ => {}
         }
-        "reference_declarator" => {
-            info.has_reference = true;
-        }
-        _ => {}
     }
 
     for child in node.named_children(&mut node.walk()) {
@@ -47,6 +55,15 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
 
     if let Some(node) = node {
         for child in node.children(&mut node.walk()) {
+            let modifiers: Vec<Modifier> = child
+                .named_children(&mut child.walk())
+                .find(|n| n.kind() == "type_qualifier")
+                .map(|m| {
+                    m.children(&mut m.walk())
+                        .map(|n| Modifier::from(&source[n.start_byte()..n.end_byte()]))
+                        .collect()
+                })
+                .unwrap_or_default();
             match child.kind() {
                 "parameter_declaration"
                 | "variadic_parameter_declaration"
@@ -65,11 +82,16 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
                         .child_by_field_name("default_value")
                         .map(|n| source[n.start_byte()..n.end_byte()].to_string());
 
+                    let info = &mut DeclaratorInfo::default();
+                    analyze_declarator(child, info);
+
                     params.push(Parameter {
                         name,
                         type_specifier: type_name,
-                        modifiers: Vec::new(),
+                        modifiers,
                         variadic: child.kind() == "variadic_parameter_declaration",
+                        reference: info.has_reference,
+                        pointer_depth: info.pointer_depth,
                         default,
                     });
                 }
@@ -77,9 +99,11 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
                     params.push(Parameter {
                         name: child.kind().into(),
                         type_specifier: String::default(),
-                        modifiers: Vec::new(),
+                        modifiers,
                         variadic: true,
                         default: None,
+                        reference: bool::default(),
+                        pointer_depth: usize::default(),
                     });
                 }
                 _ => (),
@@ -90,6 +114,10 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
     params
 }
 
+fn extract_function_declarator<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
+    node.children(&mut node.walk())
+        .find(|n| n.kind() == "function_declarator")
+}
 #[derive(Clone)]
 pub(crate) struct Cpp {}
 impl LanguageParser for Cpp {}
@@ -113,32 +141,60 @@ impl Grammer for Cpp {
             let info = &mut DeclaratorInfo::default();
             analyze_declarator(declarator, info);
 
-            let mut value = "";
-            if let Some(assign_node) = node.children(&mut node.walk()).find(|n| n.kind() == "=") {
-                if let Some(val) = assign_node.next_sibling() {
-                    value = &content[val.start_byte()..val.end_byte()];
-                }
+            let value = node
+                .children(&mut node.walk())
+                .find(|n| n.kind() == "=")
+                .and_then(|n| {
+                    n.next_sibling()
+                        .map(|n| &content[n.start_byte()..n.end_byte()])
+                })
+                .or_else(|| {
+                    node.children(&mut node.walk())
+                        .find(|n| n.kind() == "default_method_clause")
+                        .map(|_| "default")
+                })
+                .unwrap_or_default()
+                .to_string();
+
+            if info.is_destructor {
+                return SymbolKind::Destructor(value);
             }
 
+            let type_qualifier = extract_function_declarator(node)
+                .and_then(|_| {
+                    node.children(&mut node.walk())
+                        .find(|n| n.kind() == "type_qualifier")
+                })
+                .map(|n| &content[n.start_byte()..n.end_byte()])
+                .unwrap_or_default();
+
             if let Some(type_node) = node.child_by_field_name("type") {
-                let name = &content[type_node.start_byte()..declarator.start_byte()];
+                let name = [
+                    type_qualifier.trim().to_string(),
+                    content[type_node.start_byte()..declarator.start_byte()]
+                        .trim()
+                        .to_string(),
+                ]
+                .join(" ")
+                .trim()
+                .to_string();
                 if declarator.kind() == "function_declarator" {
                     return SymbolKind::Method(MethodKind {
-                        value: value.to_string(),
+                        value: value,
                         params: extract_parameters(info.parameters, content),
                         return_type: Type {
                             reference: info.has_reference,
                             pointer_depth: info.pointer_depth,
-                            name: name.trim().to_string(),
+                            name,
                         },
                     });
                 } else {
                     return SymbolKind::Field(FieldKind {
-                        value: value.to_string(),
+                        value: value,
                         dtype: Type {
                             reference: info.has_reference,
                             pointer_depth: info.pointer_depth,
-                            name: name.trim().to_string(),
+                            name,
                         },
                     });
                 }
@@ -148,6 +204,7 @@ impl Grammer for Cpp {
             "class_specifier" => SymbolKind::Class,
             "struct_specifier" => SymbolKind::Struct,
             "enum_specifier" => SymbolKind::Enum,
+            "translation_unit" => SymbolKind::Root,
             _ => SymbolKind::Unknown,
         }
     }
@@ -180,21 +237,35 @@ impl Grammer for Cpp {
             visibility = Visibility::Public
         }
 
+        let qualifier_modifier = |qualifier: &str| match qualifier {
+            "constexpr" | "consteval" | "constinit" | "const" => Modifier::Constant,
+            _ => Modifier::from(qualifier),
+        };
+
+        let function_declarator = extract_function_declarator(node);
+
+        if let Some(func_node) = function_declarator {
+            // type qualifier can appear at end of method
+            if let Some(type_name) = func_node
+                .children(&mut func_node.walk())
+                .find(|n| n.kind() == "type_qualifier")
+                .map(|n| &content[n.start_byte()..n.end_byte()])
+            {
+                modifs.push(qualifier_modifier(type_name))
+            }
+        }
+
+        let has_function_declarator = function_declarator.is_some();
         for n in node.children(&mut node.walk()) {
             let val = &content[n.start_byte()..n.end_byte()];
             let modif = match n.kind() {
-                "type_qualifier" => match val {
-                    "constexpr" | "consteval" | "constinit" => Some(Modifier::Constant),
-                    _ => Some(Modifier::from(val)),
-                },
+                "type_qualifier" if !has_function_declarator => Some(qualifier_modifier(val)),
                 "virtual_specifier"
                 | "attribute_specifier"
                 | "storage_class_specifier"
                 | "ms_declspec_modifier"
                 | "virtual"
-                | "attribute_declaration" => match val {
-                    _ => Some(Modifier::from(val)),
-                },
+                | "attribute_declaration" => Some(Modifier::from(val)),
                 _ => None,
             };
             if let Some(v) = modif {
@@ -286,6 +357,9 @@ impl Grammer for Cpp {
         }
 
         ""
+    }
+    fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>) {
+        ()
     }
 }
 

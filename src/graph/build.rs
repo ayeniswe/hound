@@ -7,7 +7,7 @@ use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator as _, Tr
 use uuid::Uuid;
 
 use crate::graph::{
-    Visibility,
+    SymbolKind, Visibility,
     grammer::Grammer,
     relationship::{Relationship, RelationshipKind, RelationshipTarget},
     symbol::{Location, Symbol},
@@ -56,41 +56,46 @@ fn build_symbols_and_relationships(
     // MARK: GET SYMBOL KIND
     symbol.kind = grammer.to_symbolkind(node, content);
 
-    // MARK: GET SYMBOL NAME
-    symbol.name = grammer.to_name(node, content).to_string();
+    if symbol.kind != SymbolKind::Root {
+        // MARK: GET SYMBOL NAME
+        symbol.name = grammer.to_name(node, content).to_string();
 
-    // MARK: GET SYMBOL MODIFIERS
-    let (v, m) = grammer.extract_declaration_attributes(node, content);
-    if let Some(def) = default_visibility {
-        symbol.visibility = def.clone();
-    } else {
-        symbol.visibility = v;
-    }
-    symbol.modifier = m;
-
-    // MARK: GET GENERIC PARAMETERS
-    symbol.generics = grammer.to_generics(node, content);
-
-    // MARK: GET RELATIONSHIPS
-    if let Some(interfaces) = grammer.gather_all_inheritance(node, content) {
-        for i in interfaces {
-            relationships.push(Relationship {
-                from: symbol.id,
-                to: RelationshipTarget::Unresolved(i.trim().to_string()),
-                kind: RelationshipKind::Inherits,
-                metadata: HashMap::new(),
-            });
+        // MARK: GET SYMBOL MODIFIERS
+        let (v, m) = grammer.extract_declaration_attributes(node, content);
+        if let Some(def) = default_visibility {
+            symbol.visibility = def.clone();
+        } else {
+            symbol.visibility = v;
         }
-    }
-    if let Some(permits) = grammer.gather_all_permits(node, content) {
-        for p in permits {
-            relationships.push(Relationship {
-                from: symbol.id,
-                to: RelationshipTarget::Unresolved(p.trim().to_string()),
-                kind: RelationshipKind::Permits,
-                metadata: HashMap::new(),
-            });
+        symbol.modifier = m;
+
+        // MARK: GET GENERIC PARAMETERS
+        symbol.generics = grammer.to_generics(node, content);
+
+        // MARK: GET RELATIONSHIPS
+        if let Some(interfaces) = grammer.gather_all_inheritance(node, content) {
+            for i in interfaces {
+                relationships.push(Relationship {
+                    from: symbol.id,
+                    to: RelationshipTarget::Unresolved(i.trim().to_string()),
+                    kind: RelationshipKind::Inherits,
+                    metadata: HashMap::new(),
+                });
+            }
         }
+        if let Some(permits) = grammer.gather_all_permits(node, content) {
+            for p in permits {
+                relationships.push(Relationship {
+                    from: symbol.id,
+                    to: RelationshipTarget::Unresolved(p.trim().to_string()),
+                    kind: RelationshipKind::Permits,
+                    metadata: HashMap::new(),
+                });
+            }
+        }
+
+        // MARK: GET GRAMMER SPECIFIC METADATA
+        grammer.extract_metadata(node, content, &mut symbol.metadata);
     }
 
     // GET CHILD DECLARATION
@@ -153,7 +158,7 @@ fn collect_symbols_recursively(
                 &mut scoped_visiblity,
             )
         } else {
-            println!("Node: {}", child.kind());
+            // println!("Node: {}", child);
             grammer.apply_visibility_change(&child, content, &mut scoped_visiblity)
         }
     }
