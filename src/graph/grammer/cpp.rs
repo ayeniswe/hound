@@ -1,13 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
     Modifier, SymbolKind, Visibility,
+    build::Relationships,
     grammer::Grammer,
     parser::LanguageParser,
-    symbol::{FieldKind, Generic, MethodKind, Parameter, Type},
+    relationship::{Relationship, RelationshipKind, RelationshipTarget},
+    symbol::{Compound, FunctionDefinition, Generic, MemberVariable, Parameter, SymbolId, Type},
 };
 
 fn sanitize_template_names(value: &str) -> &str {
@@ -118,6 +120,100 @@ fn extract_function_declarator<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     node.children(&mut node.walk())
         .find(|n| n.kind() == "function_declarator")
 }
+
+fn to_symbolkind_from_function_or_member(node: &Node, content: &str) -> SymbolKind {
+    if let Some(declarator) = node.child_by_field_name("declarator") {
+        let info = &mut DeclaratorInfo::default();
+        analyze_declarator(declarator, info);
+
+        let value = node
+            .children(&mut node.walk())
+            .find(|n| n.kind() == "=")
+            .and_then(|n| {
+                n.next_sibling()
+                    .map(|n| &content[n.start_byte()..n.end_byte()])
+            })
+            .or_else(|| {
+                node.children(&mut node.walk())
+                    .find(|n| n.kind() == "default_method_clause")
+                    .map(|_| "default")
+            })
+            .unwrap_or_default()
+            .to_string();
+
+        if info.is_destructor {
+            return SymbolKind::Destructor(value);
+        }
+
+        let type_qualifier = extract_function_declarator(node)
+            .and_then(|_| {
+                node.children(&mut node.walk())
+                    .find(|n| n.kind() == "type_qualifier")
+            })
+            .map(|n| &content[n.start_byte()..n.end_byte()])
+            .unwrap_or_default();
+
+        if let Some(type_node) = node.child_by_field_name("type") {
+            let name = [
+                type_qualifier.trim().to_string(),
+                content[type_node.start_byte()..declarator.start_byte()]
+                    .trim()
+                    .to_string(),
+            ]
+            .join(" ")
+            .trim()
+            .to_string();
+            if declarator.kind() == "function_declarator" {
+                return SymbolKind::FunctionDefinition(FunctionDefinition {
+                    value: value,
+                    params: extract_parameters(info.parameters, content),
+                    return_type: Type {
+                        reference: info.has_reference,
+                        pointer_depth: info.pointer_depth,
+                        name,
+                    },
+                });
+            } else {
+                return SymbolKind::MemberVariable(MemberVariable {
+                    value: value,
+                    dtype: Type {
+                        reference: info.has_reference,
+                        pointer_depth: info.pointer_depth,
+                        name,
+                    },
+                });
+            }
+        }
+    }
+    SymbolKind::Unknown
+}
+
+fn extract_function_calls(node: &Node, content: &str, calls: &mut HashSet<String>) {
+    if let Some(func_node) = node.child_by_field_name("function") {
+        calls.insert(content[func_node.start_byte()..func_node.end_byte()].to_string());
+    }
+    if let Some(args_node) = node.child_by_field_name("arguments") {
+        for arg in args_node.named_children(&mut args_node.walk()) {
+            extract_function_calls(&arg, content, &mut *calls)
+        }
+    }
+}
+fn to_symbolkind_from_compound(node: &Node, content: &str) -> SymbolKind {
+    // Extract only the functions calls inside
+    let mut calls = HashSet::new();
+    for call in node
+        .named_children(&mut node.walk())
+        .filter(|n| n.kind() == "expression_statement")
+        .flat_map(|n| {
+            n.named_children(&mut n.walk())
+                .find(|n| n.kind() == "call_expression")
+        })
+    {
+        extract_function_calls(&call, content, &mut calls);
+    }
+
+    SymbolKind::Compound(Compound { calls })
+}
 #[derive(Clone)]
 pub(crate) struct Cpp {}
 impl LanguageParser for Cpp {}
@@ -129,6 +225,7 @@ impl Grammer for Cpp {
             "enum_specifier",
             "function_definition",
             "field_declaration",
+            "compound_statement",
         ]
     }
 
@@ -137,75 +234,17 @@ impl Grammer for Cpp {
     }
 
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind {
-        if let Some(declarator) = node.child_by_field_name("declarator") {
-            let info = &mut DeclaratorInfo::default();
-            analyze_declarator(declarator, info);
-
-            let value = node
-                .children(&mut node.walk())
-                .find(|n| n.kind() == "=")
-                .and_then(|n| {
-                    n.next_sibling()
-                        .map(|n| &content[n.start_byte()..n.end_byte()])
-                })
-                .or_else(|| {
-                    node.children(&mut node.walk())
-                        .find(|n| n.kind() == "default_method_clause")
-                        .map(|_| "default")
-                })
-                .unwrap_or_default()
-                .to_string();
-
-            if info.is_destructor {
-                return SymbolKind::Destructor(value);
-            }
-
-            let type_qualifier = extract_function_declarator(node)
-                .and_then(|_| {
-                    node.children(&mut node.walk())
-                        .find(|n| n.kind() == "type_qualifier")
-                })
-                .map(|n| &content[n.start_byte()..n.end_byte()])
-                .unwrap_or_default();
-
-            if let Some(type_node) = node.child_by_field_name("type") {
-                let name = [
-                    type_qualifier.trim().to_string(),
-                    content[type_node.start_byte()..declarator.start_byte()]
-                        .trim()
-                        .to_string(),
-                ]
-                .join(" ")
-                .trim()
-                .to_string();
-                if declarator.kind() == "function_declarator" {
-                    return SymbolKind::Method(MethodKind {
-                        value: value,
-                        params: extract_parameters(info.parameters, content),
-                        return_type: Type {
-                            reference: info.has_reference,
-                            pointer_depth: info.pointer_depth,
-                            name,
-                        },
-                    });
-                } else {
-                    return SymbolKind::Field(FieldKind {
-                        value: value,
-                        dtype: Type {
-                            reference: info.has_reference,
-                            pointer_depth: info.pointer_depth,
-                            name,
-                        },
-                    });
-                }
-            }
-        }
         match node.kind() {
             "class_specifier" => SymbolKind::Class,
             "struct_specifier" => SymbolKind::Struct,
             "enum_specifier" => SymbolKind::Enum,
-            "translation_unit" => SymbolKind::Root,
-            _ => SymbolKind::Unknown,
+            "translation_unit" => SymbolKind::Module,
+            "compound_statement" => to_symbolkind_from_compound(node, content),
+            _ => {
+                // Function definition and member fields are very simliar so we must
+                // dig lower for differences
+                to_symbolkind_from_function_or_member(node, content)
+            }
         }
     }
 
@@ -360,6 +399,26 @@ impl Grammer for Cpp {
     }
     fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>) {
         ()
+    }
+
+    fn pair_relationships(
+        &self,
+        node: &Node,
+        parent_id: SymbolId,
+        child_id: SymbolId,
+        relationships: &mut Relationships,
+    ) {
+        let kind = match node.kind() {
+            "compound_statement" => RelationshipKind::Uses,
+            _ => RelationshipKind::Contains,
+        };
+
+        relationships.push(Relationship {
+            from: parent_id,
+            to: RelationshipTarget::Resolved(child_id),
+            kind,
+            metadata: HashMap::new(),
+        })
     }
 }
 

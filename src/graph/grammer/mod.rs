@@ -5,15 +5,23 @@ use std::collections::HashMap;
 
 use tree_sitter::{Language, Node};
 
-use crate::graph::{Modifier, SymbolKind, Visibility, symbol::Generic};
+use crate::graph::{
+    Modifier, SymbolKind, Visibility,
+    build::Relationships,
+    symbol::{Generic, SymbolId},
+};
 
 /// The Grammer trait abstracts the query language tokens
 pub(crate) trait Grammer {
     fn declaration_nodes(&self) -> &'static [&'static str];
     fn flatten_nodes(&self) -> &'static [&'static str];
-    fn to_symbolkind(&self, node: &Node,  content: &str) -> SymbolKind;
-    fn to_name<'a>(&self, node: &Node , content: &'a str) -> &'a str;
-    fn extract_declaration_attributes(&self, node: &Node, content: &str) -> (Visibility, Vec<Modifier>);
+    fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind;
+    fn to_name<'a>(&self, node: &Node, content: &'a str) -> &'a str;
+    fn extract_declaration_attributes(
+        &self,
+        node: &Node,
+        content: &str,
+    ) -> (Visibility, Vec<Modifier>);
     fn to_generics(&self, node: &Node, content: &str) -> Vec<Generic>;
     fn gather_all_permits<'a>(&self, node: &Node, content: &'a str) -> Option<Vec<&'a str>> {
         None
@@ -29,5 +37,12 @@ pub(crate) trait Grammer {
         scoped_vis: &mut Option<Visibility>,
     ) {
     }
-    fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String,String>);
+    fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>);
+    fn pair_relationships(
+        &self,
+        node: &Node,
+        parent_id: SymbolId,
+        child_id: SymbolId,
+        relationships: &mut Relationships,
+    );
 }

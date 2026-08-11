@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::{HashMap, HashSet}, path::PathBuf};
 use tree_sitter::{Node, Point};
 use uuid::Uuid;
 
@@ -40,7 +40,7 @@ impl<'a> From<(Node<'a>, &str)> for Type {
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
-pub(crate) struct MethodKind {
+pub(crate) struct FunctionDefinition {
     pub(crate) value: String,
     pub(crate) params: Vec<Parameter>,
     pub(crate) return_type: Type,
@@ -53,15 +53,18 @@ pub(crate) struct Constructor {
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
-pub(crate) struct FieldKind {
+pub(crate) struct MemberVariable {
     pub(crate) value: String,
     pub(crate) dtype: Type,
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
+pub(crate) struct Compound {
+    pub(crate) calls: HashSet<String>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) enum SymbolKind {
-    Function,
-    Method(MethodKind),
     Destructor(String),
     Constructor(Constructor),
 
@@ -69,18 +72,15 @@ pub(crate) enum SymbolKind {
     Struct,
     Interface,
     Trait,
-
     Enum,
+    
+    FunctionDefinition(FunctionDefinition),
+    MemberVariable(MemberVariable),
 
-    Field(FieldKind),
-    Variable,
-
-    Constant,
+    Compound(Compound),
 
     Module,
     Namespace,
-
-    Root,
 
     #[default]
     Unknown,

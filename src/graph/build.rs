@@ -10,8 +10,11 @@ use crate::graph::{
     SymbolKind, Visibility,
     grammer::Grammer,
     relationship::{Relationship, RelationshipKind, RelationshipTarget},
-    symbol::{Location, Symbol},
+    symbol::{Location, Symbol, SymbolId},
 };
+
+pub(crate) type SymbolMap = HashMap<SymbolId, Symbol>;
+pub(crate) type Relationships = Vec<Relationship>;
 
 pub(crate) struct SymbolData {
     pub(crate) tree: Tree,
@@ -39,13 +42,13 @@ pub(crate) fn handle_query<F: FnMut(&Node, &str, String)>(
     }
 }
 
-fn build_symbols_and_relationships(
+pub(crate) fn build_symbols_and_relationships(
     grammer: &Box<dyn Grammer>,
     node: &Node,
     content: &str,
     file: &Path,
-    relationships: &mut Vec<Relationship>,
-    symbols: &mut Vec<Symbol>,
+    relationships: &mut Relationships,
+    symbols: &mut SymbolMap,
     default_visibility: &mut Option<Visibility>,
 ) -> Uuid {
     let mut symbol = Symbol::default();
@@ -56,7 +59,7 @@ fn build_symbols_and_relationships(
     // MARK: GET SYMBOL KIND
     symbol.kind = grammer.to_symbolkind(node, content);
 
-    if symbol.kind != SymbolKind::Root {
+    if !matches!(symbol.kind, SymbolKind::Module | SymbolKind::Compound(_)) {
         // MARK: GET SYMBOL NAME
         symbol.name = grammer.to_name(node, content).to_string();
 
@@ -111,19 +114,19 @@ fn build_symbols_and_relationships(
     );
 
     let id = symbol.id;
-    symbols.push(symbol);
+    symbols.insert(id, symbol);
 
     id
 }
 
 fn collect_symbols_recursively(
     node: &Node,
-    parent_id: Uuid,
+    parent_id: SymbolId,
     grammer: &Box<dyn Grammer>,
     file: &Path,
     content: &str,
-    relationships: &mut Vec<Relationship>,
-    symbols: &mut Vec<Symbol>,
+    relationships: &mut Relationships,
+    symbols: &mut SymbolMap,
     default_visibility: &mut Option<Visibility>,
 ) {
     let mut scoped_visiblity = default_visibility;
@@ -138,14 +141,9 @@ fn collect_symbols_recursively(
                 symbols,
                 &mut scoped_visiblity,
             );
-            relationships.push(Relationship {
-                from: parent_id,
-                to: RelationshipTarget::Resolved(child_id),
-                kind: RelationshipKind::Contains,
-                metadata: HashMap::new(),
-            });
+            grammer.pair_relationships(&child, parent_id, child_id, relationships);
         } else if grammer.flatten_nodes().contains(&child.kind()) {
-            // Flatten body {} so we get
+            // Flatten nodes so we get
             // directly to declarations
             collect_symbols_recursively(
                 &child,
@@ -158,44 +156,7 @@ fn collect_symbols_recursively(
                 &mut scoped_visiblity,
             )
         } else {
-            // println!("Node: {}", child);
             grammer.apply_visibility_change(&child, content, &mut scoped_visiblity)
         }
-    }
-}
-
-/// Graph represents the symbology
-/// of all languages unified
-pub(crate) struct Graph {
-    symbols: Vec<Symbol>,
-    relationships: Vec<Relationship>,
-}
-
-impl Graph {
-    pub(crate) fn new(data: Vec<SymbolData>) -> Graph {
-        let mut symbols = Vec::new();
-        let mut relationships = Vec::new();
-        for sym in data {
-            build_symbols_and_relationships(
-                &sym.grammer,
-                &sym.tree.root_node(),
-                &sym.content,
-                &sym.origin,
-                &mut relationships,
-                &mut symbols,
-                &mut None,
-            );
-        }
-        Graph {
-            symbols,
-            relationships,
-        }
-    }
-
-    pub fn symbols(&self) -> &Vec<Symbol> {
-        &self.symbols
-    }
-    pub fn relationships(&self) -> &Vec<Relationship> {
-        &self.relationships
     }
 }

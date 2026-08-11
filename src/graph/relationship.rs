@@ -9,7 +9,7 @@ pub(crate) type Edges = Vec<Relationship>;
 pub(crate) enum RelationshipKind {
     #[default]
     Contains,
-    Calls,
+    Uses,
     Inherits,
     Imports,
     Permits,

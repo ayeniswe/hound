@@ -1,14 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
     Modifier, SymbolKind, Visibility,
-    build::handle_query,
+    build::{Relationships, handle_query},
     grammer::Grammer,
     parser::LanguageParser,
-    symbol::{Constructor, FieldKind, Generic, MethodKind, Parameter, Type},
+    relationship::{Relationship, RelationshipKind, RelationshipTarget},
+    symbol::{
+        Compound, Constructor, FunctionDefinition, Generic, MemberVariable, Parameter, SymbolId,
+        Type,
+    },
 };
 
 fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
@@ -62,6 +66,34 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
         .collect()
 }
 
+fn extract_function_calls(node: &Node, content: &str, calls: &mut HashSet<String>) {
+    if let Some(func_node) = node.child_by_field_name("name") {
+        calls.insert(content[func_node.start_byte()..func_node.end_byte()].to_string());
+    }
+    if let Some(args_node) = node.child_by_field_name("arguments") {
+        for arg in args_node.named_children(&mut args_node.walk()) {
+            extract_function_calls(&arg, content, &mut *calls)
+        }
+    }
+}
+
+fn to_symbolkind_from_compound(node: &Node, content: &str) -> SymbolKind {
+    // Extract only the functions calls inside
+    let mut calls = HashSet::new();
+    for call in node
+        .named_children(&mut node.walk())
+        .filter(|n| n.kind() == "expression_statement")
+        .flat_map(|n| {
+            n.named_children(&mut n.walk())
+                .find(|n| n.kind() == "method_invocation")
+        })
+    {
+        extract_function_calls(&call, content, &mut calls);
+    }
+
+    SymbolKind::Compound(Compound { calls })
+}
+
 #[derive(Clone)]
 pub(crate) struct Java {}
 impl LanguageParser for Java {}
@@ -75,6 +107,7 @@ impl Grammer for Java {
             "field_declaration",
             "constructor_declaration",
             "enum_declaration",
+            "block",
         ]
     }
     fn flatten_nodes(&self) -> &'static [&'static str] {
@@ -85,7 +118,7 @@ impl Grammer for Java {
             "method_declaration" => node
                 .child_by_field_name("type")
                 .map(|ty| {
-                    SymbolKind::Method(MethodKind {
+                    SymbolKind::FunctionDefinition(FunctionDefinition {
                         value: "".into(),
                         params: extract_parameters(node.child_by_field_name("parameters"), content),
                         return_type: Type::from((ty, content)),
@@ -102,7 +135,7 @@ impl Grammer for Java {
                         .map(|n| &content[n.start_byte()..n.end_byte()])
                         .unwrap_or_default()
                         .to_string();
-                    SymbolKind::Field(FieldKind {
+                    SymbolKind::MemberVariable(MemberVariable {
                         value,
                         dtype: Type::from((ty, content)),
                     })
@@ -112,7 +145,9 @@ impl Grammer for Java {
                 value: "".into(),
                 params: extract_parameters(node.child_by_field_name("parameters"), content),
             }),
+            "block" => to_symbolkind_from_compound(node, content),
             "class_declaration" => SymbolKind::Class,
+            "program" => SymbolKind::Module,
             _ => SymbolKind::Unknown,
         }
     }
@@ -233,6 +268,26 @@ impl Grammer for Java {
         if !exceptions.is_empty() {
             metadata.insert("throws".into(), exceptions.join(","));
         }
+    }
+
+    fn pair_relationships(
+        &self,
+        node: &Node,
+        parent_id: SymbolId,
+        child_id: SymbolId,
+        relationships: &mut Relationships,
+    ) {
+        let kind = match node.kind() {
+            "block" => RelationshipKind::Uses,
+            _ => RelationshipKind::Contains,
+        };
+
+        relationships.push(Relationship {
+            from: parent_id,
+            to: RelationshipTarget::Resolved(child_id),
+            kind,
+            metadata: HashMap::new(),
+        })
     }
 }
 
