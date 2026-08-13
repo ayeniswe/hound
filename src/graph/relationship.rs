@@ -1,15 +1,18 @@
 use std::collections::HashMap;
 
+use uuid::Uuid;
+
 use crate::graph::symbol::{Symbol, SymbolId};
 
 pub(crate) type Nodes = Vec<Symbol>;
 pub(crate) type Edges = Vec<Relationship>;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Copy, Debug, PartialEq)]
 pub(crate) enum RelationshipKind {
     #[default]
     Contains,
     Uses,
+    Calls,
     Inherits,
     Imports,
     Permits,
@@ -22,7 +25,7 @@ pub(crate) struct Relationship {
     pub(crate) from: SymbolId,
     pub(crate) to: RelationshipTarget,
     pub(crate) kind: RelationshipKind,
-    pub(crate) metadata: HashMap<String,String>,
+    pub(crate) metadata: HashMap<String, String>,
 }
 
 /// RelationshipTarget holds a future

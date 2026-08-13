@@ -1,19 +1,24 @@
 pub(in crate::graph) mod build;
 pub(in crate::graph) mod grammer;
 pub(in crate::graph) mod parser;
+pub(in crate::graph) mod query;
 pub(in crate::graph) mod relationship;
 pub(in crate::graph) mod symbol;
-
 pub(crate) use symbol::Modifier;
 pub(crate) use symbol::SymbolKind;
 pub(crate) use symbol::Visibility;
+// SHORT TEST EXPOSING NOT LONG TERM
+pub(crate) use query::Direction;
+pub(crate) use query::FindQuery;
+pub(crate) use query::Query;
+pub(crate) use query::QueryEngine;
+pub(crate) use query::RelationshipQuery;
+pub(crate) use query::SymbolKindQuery;
+pub(crate) use relationship::RelationshipKind;
+pub(crate) use relationship::RelationshipTarget;
 
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fs::File;
-use std::io;
-use std::io::Write;
-use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::graph::build::Relationships;
@@ -23,7 +28,7 @@ use crate::graph::grammer::cpp::{Cpp, CppError};
 use crate::graph::grammer::java::{Java, JavaError};
 use crate::graph::parser::LanguageParser;
 use crate::graph::relationship::Relationship;
-use crate::graph::relationship::RelationshipTarget;
+use crate::graph::symbol::Symbol;
 use crate::graph::symbol::SymbolId;
 
 /// Graph represents the symbology
@@ -36,17 +41,15 @@ pub(crate) struct Graph {
 impl Graph {
     /// Create graph of all symbols found and supported
     /// in files list
-    pub fn create(files: Vec<&Path>) -> Result<Graph, GraphError> {
-        let cpp_parser = Cpp {};
-        let java_parser = Java {};
-
+    pub(crate) fn create(files: Vec<PathBuf>) -> Result<Graph, GraphError> {
         let mut symbols = HashMap::new();
         let mut relationships = Vec::new();
+        let mut index = HashMap::new();
 
         for file in files {
             let parsed = match file.extension().and_then(|ext| ext.to_str()) {
-                Some("cpp" | "cx" | "cxx") => cpp_parser.parse(file),
-                Some("java") => java_parser.parse(file),
+                Some("cpp" | "cx" | "cxx") => Cpp.parse(&file),
+                Some("java") => Java.parse(&file),
                 _ => continue,
             };
 
@@ -61,6 +64,7 @@ impl Graph {
                 &parsed.origin,
                 &mut relationships,
                 &mut symbols,
+                &mut index,
                 &mut None,
             );
         }
@@ -71,110 +75,31 @@ impl Graph {
         })
     }
 
-    pub fn symbols(&self) -> &SymbolMap {
-        &self.symbols
+    pub(crate) fn symbol(&self, id: SymbolId) -> Option<&Symbol> {
+        self.symbols.get(&id)
     }
 
-    pub fn relationships(&self) -> &Vec<Relationship> {
-        &self.relationships
+    pub(crate) fn symbols(&self) -> impl Iterator<Item = (&SymbolId, &Symbol)> {
+        self.symbols.iter()
     }
 
-    pub fn write_tree<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        let mut file = File::create(path)?;
-
-        let mut visited = HashSet::new();
-
-        for root in self.root_symbols() {
-            self.write_node(&mut file, *root, 0, &mut visited)?;
-        }
-
-        Ok(())
+    pub(crate) fn relationships(&self) -> impl Iterator<Item = &Relationship> {
+        self.relationships.iter()
     }
 
-    fn root_symbols(&self) -> Vec<&SymbolId> {
-        let mut has_parent = HashSet::new();
-
-        for relationship in self.relationships() {
-            if let RelationshipTarget::Resolved(id) = relationship.to {
-                has_parent.insert(id);
-            }
-        }
-
-        self.symbols()
-            .into_iter()
-            .filter_map(|(id, symbol)| {
-                if !has_parent.contains(id) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn relationships_from(&self, id: SymbolId) -> impl Iterator<Item = &Relationship> {
+    pub(crate) fn relationships_from(&self, id: SymbolId) -> impl Iterator<Item = &Relationship> {
         self.relationships
             .iter()
             .filter(move |relationship| relationship.from == id)
     }
 
-    fn write_node(
-        &self,
-        file: &mut File,
-        id: SymbolId,
-        depth: usize,
-        visited: &mut HashSet<SymbolId>,
-    ) -> io::Result<()> {
-        let Some(symbol) = self.symbols.get(&id) else {
-            return Ok(());
-        };
-
-        // If we've already printed this node,
-        // don't expand it again.
-        if !visited.insert(id) {
-            return Ok(());
-        }
-
-        let indent = "    ".repeat(depth);
-
-        writeln!(file, "{}{:?}", indent, symbol)?;
-
-        for relationship in self.relationships_from(id) {
-            let edge_indent = "    ".repeat(depth + 1);
-
-            match &relationship.to {
-                RelationshipTarget::Resolved(target_id) => {
-                    let already_visited = visited.contains(&target_id);
-
-                    if let Some(target) = self.symbols.get(&target_id) {
-                        if already_visited {
-                            // The node exists elsewhere in the tree.
-                            // Show the edge, but don't expand the node.
-                            writeln!(
-                                file,
-                                "{}└── [{:?}] → [{:?}]",
-                                edge_indent, relationship.kind, target
-                            )?;
-                        } else {
-                            // New node: follow the edge and expand it.
-                            writeln!(file, "{}└── [{:?}] →", edge_indent, relationship.kind)?;
-
-                            self.write_node(file, *target_id, depth + 2, visited)?;
-                        }
-                    }
-                }
-
-                RelationshipTarget::Unresolved(name) => {
-                    writeln!(
-                        file,
-                        "{}└── [{:?}] → {} [unresolved]",
-                        edge_indent, relationship.kind, name
-                    )?;
-                }
-            }
-        }
-
-        Ok(())
+    pub(crate) fn relationships_to(&self, id: SymbolId) -> impl Iterator<Item = &Relationship> {
+        self.relationships.iter().filter(move |relationship| {
+            matches!(
+                relationship.to,
+                RelationshipTarget::Resolved(target_id) if target_id == id
+            )
+        })
     }
 }
 

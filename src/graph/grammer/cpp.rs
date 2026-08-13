@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
 use thiserror::Error;
 use tree_sitter::Node;
@@ -9,7 +9,9 @@ use crate::graph::{
     grammer::Grammer,
     parser::LanguageParser,
     relationship::{Relationship, RelationshipKind, RelationshipTarget},
-    symbol::{Compound, FunctionDefinition, Generic, MemberVariable, Parameter, SymbolId, Type},
+    symbol::{
+         FunctionDefinition, Generic, Language, MemberVariable, Parameter, SymbolId, Type,
+    },
 };
 
 fn sanitize_template_names(value: &str) -> &str {
@@ -188,34 +190,8 @@ fn to_symbolkind_from_function_or_member(node: &Node, content: &str) -> SymbolKi
     SymbolKind::Unknown
 }
 
-fn extract_function_calls(node: &Node, content: &str, calls: &mut HashSet<String>) {
-    if let Some(func_node) = node.child_by_field_name("function") {
-        calls.insert(content[func_node.start_byte()..func_node.end_byte()].to_string());
-    }
-    if let Some(args_node) = node.child_by_field_name("arguments") {
-        for arg in args_node.named_children(&mut args_node.walk()) {
-            extract_function_calls(&arg, content, &mut *calls)
-        }
-    }
-}
-fn to_symbolkind_from_compound(node: &Node, content: &str) -> SymbolKind {
-    // Extract only the functions calls inside
-    let mut calls = HashSet::new();
-    for call in node
-        .named_children(&mut node.walk())
-        .filter(|n| n.kind() == "expression_statement")
-        .flat_map(|n| {
-            n.named_children(&mut n.walk())
-                .find(|n| n.kind() == "call_expression")
-        })
-    {
-        extract_function_calls(&call, content, &mut calls);
-    }
-
-    SymbolKind::Compound(Compound { calls })
-}
 #[derive(Clone)]
-pub(crate) struct Cpp {}
+pub(crate) struct Cpp;
 impl LanguageParser for Cpp {}
 impl Grammer for Cpp {
     fn declaration_nodes(&self) -> &'static [&'static str] {
@@ -225,12 +201,12 @@ impl Grammer for Cpp {
             "enum_specifier",
             "function_definition",
             "field_declaration",
-            "compound_statement",
+            "call_expression",
         ]
     }
 
     fn flatten_nodes(&self) -> &'static [&'static str] {
-        &["template_declaration", "field_declaration_list"]
+        &["template_declaration", "field_declaration_list", "compound_statement", "expression_statement", "argument_list"]
     }
 
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind {
@@ -239,7 +215,7 @@ impl Grammer for Cpp {
             "struct_specifier" => SymbolKind::Struct,
             "enum_specifier" => SymbolKind::Enum,
             "translation_unit" => SymbolKind::Module,
-            "compound_statement" => to_symbolkind_from_compound(node, content),
+            "call_expression" => SymbolKind::FunctionCall,
             _ => {
                 // Function definition and member fields are very simliar so we must
                 // dig lower for differences
@@ -315,7 +291,10 @@ impl Grammer for Cpp {
         (visibility, modifs)
     }
 
-    fn language(&self) -> tree_sitter::Language {
+    fn language(&self) -> Language {
+        Language::Cpp
+    }
+    fn tree_language(&self) -> tree_sitter::Language {
         tree_sitter_cpp::LANGUAGE.into()
     }
 
@@ -377,6 +356,11 @@ impl Grammer for Cpp {
 
         // Explicit grammar field
         if let Some(name) = node.child_by_field_name("name") {
+            return self.to_name(&name, content);
+        }
+        
+        // Function name
+        if let Some(name) = node.child_by_field_name("function") {
             return self.to_name(&name, content);
         }
 

@@ -1,17 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind, Visibility,
-    build::{Relationships, handle_query},
-    grammer::Grammer,
-    parser::LanguageParser,
-    relationship::{Relationship, RelationshipKind, RelationshipTarget},
-    symbol::{
-        Compound, Constructor, FunctionDefinition, Generic, MemberVariable, Parameter, SymbolId,
-        Type,
+    Modifier, SymbolKind::{self}, Visibility, build::{Relationships, handle_query}, grammer::Grammer, parser::LanguageParser, relationship::{Relationship, RelationshipKind, RelationshipTarget}, symbol::{
+     Constructor, FunctionDefinition, Generic, Language, MemberVariable, Parameter,
+        SymbolId, Type,
     },
 };
 
@@ -66,36 +61,8 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
         .collect()
 }
 
-fn extract_function_calls(node: &Node, content: &str, calls: &mut HashSet<String>) {
-    if let Some(func_node) = node.child_by_field_name("name") {
-        calls.insert(content[func_node.start_byte()..func_node.end_byte()].to_string());
-    }
-    if let Some(args_node) = node.child_by_field_name("arguments") {
-        for arg in args_node.named_children(&mut args_node.walk()) {
-            extract_function_calls(&arg, content, &mut *calls)
-        }
-    }
-}
-
-fn to_symbolkind_from_compound(node: &Node, content: &str) -> SymbolKind {
-    // Extract only the functions calls inside
-    let mut calls = HashSet::new();
-    for call in node
-        .named_children(&mut node.walk())
-        .filter(|n| n.kind() == "expression_statement")
-        .flat_map(|n| {
-            n.named_children(&mut n.walk())
-                .find(|n| n.kind() == "method_invocation")
-        })
-    {
-        extract_function_calls(&call, content, &mut calls);
-    }
-
-    SymbolKind::Compound(Compound { calls })
-}
-
 #[derive(Clone)]
-pub(crate) struct Java {}
+pub(crate) struct Java;
 impl LanguageParser for Java {}
 impl Grammer for Java {
     fn declaration_nodes(&self) -> &'static [&'static str] {
@@ -107,11 +74,29 @@ impl Grammer for Java {
             "field_declaration",
             "constructor_declaration",
             "enum_declaration",
-            "block",
+            "method_invocation",
         ]
     }
     fn flatten_nodes(&self) -> &'static [&'static str] {
-        &["class_body"]
+        &[
+            "class_body",
+            "block",
+            "return_statement",
+            "expression_statement",
+            "labeled_statement",
+            "assert_statement",
+            "do_statement",
+            "yield_statement",
+            "try_statement",
+            "catch_clause",
+            "finally_clause",
+            "parenthesized_expression",
+            "binary_expression",
+            "assignment_expression",
+            "if_statement",
+            "for_statement",
+            "argument_list",
+        ]
     }
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind {
         match node.kind() {
@@ -145,7 +130,7 @@ impl Grammer for Java {
                 value: "".into(),
                 params: extract_parameters(node.child_by_field_name("parameters"), content),
             }),
-            "block" => to_symbolkind_from_compound(node, content),
+            "method_invocation" => SymbolKind::FunctionCall,
             "class_declaration" => SymbolKind::Class,
             "program" => SymbolKind::Module,
             _ => SymbolKind::Unknown,
@@ -184,7 +169,7 @@ impl Grammer for Java {
             let mut generics_map: HashMap<String, Generic> = HashMap::new();
             let mut current_generic: String = String::new();
             handle_query(
-                &self.language(),
+                &tree_sitter_java::LANGUAGE.into(),
                 "(type_parameter
             (type_identifier) @name
                 (type_bound [
@@ -239,7 +224,10 @@ impl Grammer for Java {
         Some(inherits)
     }
 
-    fn language(&self) -> tree_sitter::Language {
+    fn language(&self) -> Language {
+        Language::Java
+    }
+    fn tree_language(&self) -> tree_sitter::Language {
         tree_sitter_java::LANGUAGE.into()
     }
 
@@ -278,7 +266,7 @@ impl Grammer for Java {
         relationships: &mut Relationships,
     ) {
         let kind = match node.kind() {
-            "block" => RelationshipKind::Uses,
+            "method_invocation" => RelationshipKind::Calls,
             _ => RelationshipKind::Contains,
         };
 

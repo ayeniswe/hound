@@ -42,6 +42,8 @@ pub(crate) fn handle_query<F: FnMut(&Node, &str, String)>(
     }
 }
 
+type SymbolIndexKey = (String, SymbolKind);
+
 pub(crate) fn build_symbols_and_relationships(
     grammer: &Box<dyn Grammer>,
     node: &Node,
@@ -49,20 +51,42 @@ pub(crate) fn build_symbols_and_relationships(
     file: &Path,
     relationships: &mut Relationships,
     symbols: &mut SymbolMap,
+    index: &mut HashMap<SymbolIndexKey, SymbolId>,
     default_visibility: &mut Option<Visibility>,
 ) -> Uuid {
     let mut symbol = Symbol::default();
     symbol.id = Uuid::new_v4();
     symbol.file = file.to_path_buf();
-    symbol.location = Location::from((node.start_position(), node.end_position()));
+    symbol.language = grammer.language();
+    symbol.location = vec![Location::from((node.start_position(), node.end_position()))];
 
     // MARK: GET SYMBOL KIND
     symbol.kind = grammer.to_symbolkind(node, content);
 
-    if !matches!(symbol.kind, SymbolKind::Module | SymbolKind::Compound(_)) {
-        // MARK: GET SYMBOL NAME
-        symbol.name = grammer.to_name(node, content).to_string();
+    // MARK: GET SYMBOL NAME
+    symbol.name = if matches!(symbol.kind, SymbolKind::Module) {
+        file.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        grammer.to_name(node, content).to_string()
+    };
 
+    // MARK: Handle index lookup to dedup
+    if let Some(id) = index.get(&(symbol.name.clone(), symbol.kind.clone())) {
+        let sym = symbols.get_mut(id).unwrap();
+        match sym.kind {
+            SymbolKind::FunctionCall => {
+                // Location can be differ so track all
+                sym.location.append(&mut symbol.location);
+            }
+            _ => (),
+        }
+        
+        return *id;
+    }
+
+    if !matches!(symbol.kind, SymbolKind::Module) {
         // MARK: GET SYMBOL MODIFIERS
         let (v, m) = grammer.extract_declaration_attributes(node, content);
         if let Some(def) = default_visibility {
@@ -110,10 +134,12 @@ pub(crate) fn build_symbols_and_relationships(
         content,
         relationships,
         symbols,
+        index,
         default_visibility,
     );
 
     let id = symbol.id;
+    index.insert((symbol.name.clone(), symbol.kind.clone()), id);
     symbols.insert(id, symbol);
 
     id
@@ -127,6 +153,7 @@ fn collect_symbols_recursively(
     content: &str,
     relationships: &mut Relationships,
     symbols: &mut SymbolMap,
+    index: &mut HashMap<SymbolIndexKey, SymbolId>,
     default_visibility: &mut Option<Visibility>,
 ) {
     let mut scoped_visiblity = default_visibility;
@@ -139,6 +166,7 @@ fn collect_symbols_recursively(
                 file,
                 relationships,
                 symbols,
+                index,
                 &mut scoped_visiblity,
             );
             grammer.pair_relationships(&child, parent_id, child_id, relationships);
@@ -153,6 +181,7 @@ fn collect_symbols_recursively(
                 content,
                 relationships,
                 symbols,
+                index,
                 &mut scoped_visiblity,
             )
         } else {

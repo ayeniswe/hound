@@ -3,12 +3,12 @@ pub(crate) mod java;
 
 use std::collections::HashMap;
 
-use tree_sitter::{Language, Node};
+use tree_sitter::Node;
 
 use crate::graph::{
     Modifier, SymbolKind, Visibility,
     build::Relationships,
-    symbol::{Generic, SymbolId},
+    symbol::{Generic, Language, SymbolId},
 };
 
 /// The Grammer trait abstracts the query language tokens
@@ -30,6 +30,7 @@ pub(crate) trait Grammer {
         None
     }
     fn language(&self) -> Language;
+    fn tree_language(&self) -> tree_sitter::Language;
     fn apply_visibility_change(
         &self,
         node: &Node,

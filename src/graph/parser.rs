@@ -14,7 +14,7 @@ where
         Self: Grammer,
     {
         let mut parser = Parser::new();
-        parser.set_language(&self.language().into()).unwrap();
+        parser.set_language(&self.tree_language()).unwrap();
         let content = fs::read_to_string(file)?;
         Ok(SymbolData {
             tree: parser.parse(&content, None).unwrap(),

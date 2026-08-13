@@ -1,8 +1,18 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 use tree_sitter::{Node, Point};
 use uuid::Uuid;
 
 pub(crate) type SymbolId = Uuid;
+
+#[derive(Debug, Clone, Default, Copy)]
+pub enum Language {
+    #[default]
+    Java,
+    Cpp,
+}
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Generic {
@@ -10,7 +20,7 @@ pub(crate) struct Generic {
     pub(crate) bounds: Vec<String>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Parameter {
     pub(crate) type_specifier: String,
     pub(crate) modifiers: Vec<Modifier>,
@@ -21,7 +31,7 @@ pub(crate) struct Parameter {
     pub(crate) default: Option<String>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Type {
     pub(crate) reference: bool,
     pub(crate) pointer_depth: usize,
@@ -39,31 +49,27 @@ impl<'a> From<(Node<'a>, &str)> for Type {
     }
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct FunctionDefinition {
     pub(crate) value: String,
     pub(crate) params: Vec<Parameter>,
     pub(crate) return_type: Type,
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Constructor {
     pub(crate) value: String,
     pub(crate) params: Vec<Parameter>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MemberVariable {
     pub(crate) value: String,
     pub(crate) dtype: Type,
 }
 
-#[derive(Clone, Default, Debug, PartialEq)]
-pub(crate) struct Compound {
-    pub(crate) calls: HashSet<String>,
-}
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SymbolKind {
     Destructor(String),
     Constructor(Constructor),
@@ -73,11 +79,10 @@ pub(crate) enum SymbolKind {
     Interface,
     Trait,
     Enum,
-    
+
     FunctionDefinition(FunctionDefinition),
     MemberVariable(MemberVariable),
-
-    Compound(Compound),
+    FunctionCall,
 
     Module,
     Namespace,
@@ -125,7 +130,7 @@ impl From<&str> for Visibility {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Modifier {
     Static,
     Final,
@@ -163,14 +168,16 @@ pub(crate) struct Symbol {
 
     // Where does it live?
     pub(crate) file: PathBuf,
-    pub(crate) location: Location,
+    pub(crate) location: Vec<Location>,
 
     // Context
     pub(crate) visibility: Visibility,
     pub(crate) modifier: Vec<Modifier>,
+    pub(crate) scope: String,
 
     pub(crate) generics: Vec<Generic>,
 
     // Language-specific extras
     pub(crate) metadata: HashMap<String, String>,
+    pub(crate) language: Language,
 }
