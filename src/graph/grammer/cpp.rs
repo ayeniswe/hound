@@ -1,17 +1,10 @@
-use std::collections::{HashMap};
+use std::{collections::HashMap};
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind, Visibility,
-    build::Relationships,
-    grammer::Grammer,
-    parser::LanguageParser,
-    relationship::{Relationship, RelationshipKind, RelationshipTarget},
-    symbol::{
-         FunctionDefinition, Generic, Language, MemberVariable, Parameter, SymbolId, Type,
-    },
+    Modifier, SymbolKind, Visibility, build::{Relationships, ScopeIndexTable}, grammer::Grammer, parser::LanguageParser, relationship::{Relationship, RelationshipKind, RelationshipTarget}, symbol::{FunctionDefinition, Generic, Language, MemberVariable, Parameter, Scope, SymbolId, Type},
 };
 
 fn sanitize_template_names(value: &str) -> &str {
@@ -206,7 +199,13 @@ impl Grammer for Cpp {
     }
 
     fn flatten_nodes(&self) -> &'static [&'static str] {
-        &["template_declaration", "field_declaration_list", "compound_statement", "expression_statement", "argument_list"]
+        &[
+            "template_declaration",
+            "field_declaration_list",
+            "compound_statement",
+            "expression_statement",
+            "argument_list",
+        ]
     }
 
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind {
@@ -348,26 +347,31 @@ impl Grammer for Cpp {
         }
     }
 
-    fn to_name<'a>(&self, node: &Node, content: &'a str) -> &'a str {
+    fn to_scope(&self, node: &Node, content: &str) -> Scope {
+        // TODO impl 
+        Scope::default()
+    }
+
+    fn to_name<'a>(&self, node: &Node, content: &'a str) -> String {
         // Direct identifier
         if node.grammar_name() == "identifier" {
-            return &content[node.start_byte()..node.end_byte()];
+            return content[node.start_byte()..node.end_byte()].to_string();
         }
 
         // Explicit grammar field
         if let Some(name) = node.child_by_field_name("name") {
-            return self.to_name(&name, content);
+            return self.to_name(&name, content).to_string();
         }
-        
+
         // Function name
         if let Some(name) = node.child_by_field_name("function") {
-            return self.to_name(&name, content);
+            return self.to_name(&name, content).to_string();
         }
 
         if let Some(declarator) = node.child_by_field_name("declarator") {
             let result = self.to_name(&declarator, content);
             if !result.is_empty() {
-                return result;
+                return result.to_string();
             }
         }
 
@@ -379,7 +383,7 @@ impl Grammer for Cpp {
             }
         }
 
-        ""
+        String::default()
     }
     fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>) {
         ()
@@ -404,6 +408,11 @@ impl Grammer for Cpp {
             metadata: HashMap::new(),
         })
     }
+    
+    fn try_resolve_scope(&self, node: &Node, content: &str, table: &mut ScopeIndexTable, local_scope: &Scope) -> Scope {
+        todo!()
+    }
+
 }
 
 #[derive(Error, Debug)]

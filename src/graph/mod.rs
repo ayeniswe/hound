@@ -23,11 +23,13 @@ use thiserror::Error;
 
 use crate::graph::build::Relationships;
 use crate::graph::build::SymbolMap;
+use crate::graph::build::ScopeIndexTable;
 use crate::graph::build::build_symbols_and_relationships;
 use crate::graph::grammer::cpp::{Cpp, CppError};
 use crate::graph::grammer::java::{Java, JavaError};
 use crate::graph::parser::LanguageParser;
 use crate::graph::relationship::Relationship;
+use crate::graph::symbol::Scope;
 use crate::graph::symbol::Symbol;
 use crate::graph::symbol::SymbolId;
 
@@ -44,7 +46,7 @@ impl Graph {
     pub(crate) fn create(files: Vec<PathBuf>) -> Result<Graph, GraphError> {
         let mut symbols = HashMap::new();
         let mut relationships = Vec::new();
-        let mut index = HashMap::new();
+        let mut index_table: ScopeIndexTable = ScopeIndexTable::default();
 
         for file in files {
             let parsed = match file.extension().and_then(|ext| ext.to_str()) {
@@ -64,8 +66,9 @@ impl Graph {
                 &parsed.origin,
                 &mut relationships,
                 &mut symbols,
-                &mut index,
+                &mut index_table,
                 &mut None,
+            Scope::default()
             );
         }
 

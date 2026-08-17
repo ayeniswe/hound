@@ -7,7 +7,7 @@ use std::{
 
 use crate::graph::{
     Direction, FindQuery, Graph, Query, QueryEngine, RelationshipKind, RelationshipQuery,
-    SymbolKindQuery,
+    SymbolKind, SymbolKindQuery,
 };
 
 fn collect_source_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -37,8 +37,10 @@ fn collect_source_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 fn main() {
     // Step 1. Build out parsing engine to ingest data
     let mut files = Vec::new();
-    files.append(&mut collect_source_files(Path::new("data/TMCI")).unwrap());
-    files.append(&mut collect_source_files(Path::new("data/TMDbAPI")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/TMCI")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/TMDbAPI")).unwrap());
+    files.append(&mut collect_source_files(Path::new("data/demo/java/weapon")).unwrap());
+    files.append(&mut collect_source_files(Path::new("data/demo/java")).unwrap());
     let g = Graph::create(files).unwrap();
 
     // Step 2. Prototpe 0 - UQL
@@ -54,22 +56,9 @@ fn main() {
         }),
     }));
 
-    println!("RESULTS: {:?}", result);
+    // for sym in g.symbols() {
+    //     println!("SYMBOLS: {:?}", sym.1);
+    // }
+
+    // println!("RESULTS: {:?}", result);
 }
-// 2. Define universal domain model
-//         ↓
-// 3. Define Query IR
-//         ↓
-// 4. Build Graph query primitives
-//         ↓
-// 5. Build Query Executor
-//         ↓
-// 6. Build Query Planner
-//         ↓
-// 7. Build DSL lexer/parser
-//         ↓
-// 8. Build GUI → Query IR adapter
-//         ↓
-// 9. Build result/projection layer
-//         ↓
-// 10. Add optimization + indexes

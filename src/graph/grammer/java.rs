@@ -1,11 +1,18 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind::{self}, Visibility, build::{Relationships, handle_query}, grammer::Grammer, parser::LanguageParser, relationship::{Relationship, RelationshipKind, RelationshipTarget}, symbol::{
-     Constructor, FunctionDefinition, Generic, Language, MemberVariable, Parameter,
+    Modifier,
+    SymbolKind::{self},
+    Visibility,
+    build::{Relationships, ScopeIndexTable, handle_query},
+    grammer::Grammer,
+    parser::LanguageParser,
+    relationship::{Relationship, RelationshipKind, RelationshipTarget},
+    symbol::{
+        Constructor, FunctionDefinition, Generic, Language, MemberVariable, Parameter, Scope,
         SymbolId, Type,
     },
 };
@@ -61,6 +68,33 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
         .collect()
 }
 
+fn extract_package_declaration(node: &Node, content: &str) -> Option<String> {
+    if let Some(n) = node
+        .named_children(&mut node.walk())
+        .find(|n| n.kind() == "package_declaration")
+    {
+        return Some(
+            content[n.start_byte()..n.end_byte()]
+                .trim_start_matches("package")
+                .trim_end_matches(";")
+                .trim()
+                .to_string(),
+        );
+    }
+    None
+}
+fn extract_import_declaration(node: &Node, content: &str) -> Scope {
+    let scopes: Vec<String> = content[node.start_byte()..node.end_byte()]
+        .trim_start_matches("import")
+        .trim_end_matches(";")
+        .trim()
+        .to_string()
+        .split(".")
+        .map(|x| x.to_string())
+        .collect();
+    let wildcard = scopes.last().map_or("", |v| v) == "*";
+    Scope { scopes, wildcard }
+}
 #[derive(Clone)]
 pub(crate) struct Java;
 impl LanguageParser for Java {}
@@ -75,6 +109,7 @@ impl Grammer for Java {
             "constructor_declaration",
             "enum_declaration",
             "method_invocation",
+            "import_declaration",
         ]
     }
     fn flatten_nodes(&self) -> &'static [&'static str] {
@@ -132,6 +167,7 @@ impl Grammer for Java {
             }),
             "method_invocation" => SymbolKind::FunctionCall,
             "class_declaration" => SymbolKind::Class,
+            "import_declaration" => SymbolKind::Import(extract_import_declaration(node, content)),
             "program" => SymbolKind::Module,
             _ => SymbolKind::Unknown,
         }
@@ -230,18 +266,46 @@ impl Grammer for Java {
     fn tree_language(&self) -> tree_sitter::Language {
         tree_sitter_java::LANGUAGE.into()
     }
-
-    fn to_name<'a>(&self, node: &Node, content: &'a str) -> &'a str {
-        node.child_by_field_name("name")
-            .or_else(|| {
-                node.named_children(&mut node.walk())
-                    .find(|n| n.kind() == "variable_declarator")
-                    .and_then(|v| v.child_by_field_name("name"))
-            })
-            .map(|n| &content[n.start_byte()..n.end_byte()])
-            .unwrap_or_default()
+    fn to_scope(&self, node: &Node, content: &str) -> Scope {
+        match node.kind() {
+            "program" => {
+                if let Some(pkg) = extract_package_declaration(node, content) {
+                    Scope {
+                        scopes: pkg.split(".").map(|x| x.to_string()).collect(),
+                        wildcard: false,
+                    }
+                } else {
+                    Scope::default()
+                }
+            }
+            "class_declaration" => Scope {
+                scopes: vec![self.to_name(node, content)],
+                wildcard: false,
+            },
+            _ => Scope::default(),
+        }
     }
 
+    fn to_name(&self, node: &Node, content: &str) -> String {
+        match node.kind() {
+            "program" => extract_package_declaration(node, content).unwrap_or_default(),
+            "import_declaration" => content[node.start_byte()..node.end_byte()]
+                .trim_start_matches("import")
+                .trim_end_matches(";")
+                .trim()
+                .to_string(),
+            _ => node
+                .child_by_field_name("name")
+                .or_else(|| {
+                    node.named_children(&mut node.walk())
+                        .find(|n| n.kind() == "variable_declarator")
+                        .and_then(|v| v.child_by_field_name("name"))
+                })
+                .map(|n| &content[n.start_byte()..n.end_byte()])
+                .unwrap_or_default()
+                .to_string(),
+        }
+    }
     fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>) {
         let exceptions: Vec<&str> = node
             .named_children(&mut node.walk())
@@ -267,6 +331,7 @@ impl Grammer for Java {
     ) {
         let kind = match node.kind() {
             "method_invocation" => RelationshipKind::Calls,
+            "import_declaration" => RelationshipKind::Imports,
             _ => RelationshipKind::Contains,
         };
 
@@ -277,8 +342,95 @@ impl Grammer for Java {
             metadata: HashMap::new(),
         })
     }
-}
 
+    fn try_resolve_scope(
+        &self,
+        node: &Node,
+        content: &str,
+        table: &mut ScopeIndexTable,
+        local_scope: &Scope,
+    ) -> Scope {
+        match node.kind() {
+            "program"
+            | "class_declaration"
+            | "record_declaration"
+            | "interface_declaration"
+            | "field_declaration"
+            | "constructor_declaration"
+            | "method_declaration"
+            | "enum_declaration" => local_scope.clone(),
+            "import_declaration" => {
+                println!("IMPORT: {}", node);
+                local_scope.clone()
+            }
+            "method_invocation" => {
+                if let Some(decl) = table.index.get(local_scope) {
+                    println!("HIT THE INDEX: YEP");
+                    println!("SCOPE: {:?}", local_scope);
+                    println!("NODE: {:?}", decl);
+                    // Check if local scope has function defintion
+                    if let Some(field_node) = node.child_by_field_name("object") {
+                        let field_access = &content[field_node.start_byte()..field_node.end_byte()];
+                        let fields: Vec<&str> = field_access.split(".").collect();
+
+                        // Find field declaration and resolve data type
+                        let name = fields.first().unwrap();
+                        if let Some((_, symbol)) = decl.get(&(
+                            name.to_string(),
+                            SymbolKind::MemberVariable(MemberVariable::default()),
+                        )) {
+                            // Use symbol info find path to resolution
+                            if let SymbolKind::MemberVariable(mem) = symbol {
+                                let name = &mem.dtype.name;
+                                // Check local scope
+                                if let Some((_, _)) =
+                                    decl.get(&(name.to_string(), SymbolKind::Class))
+                                {
+                                    println!("FOUND MEMBER");
+                                    let mut scopes = local_scope.scopes.clone();
+                                    scopes.push(name.to_string());
+                                    return Scope {
+                                        scopes,
+                                        wildcard: false,
+                                    };
+                                } else {
+                                    // Check local imports
+                                    // Check package
+                                    // Either scopes are not foun yer
+                                    // or third party and will stay unresolved
+                                    // regardless set unresolved to latter
+                                    // resolve if applicable
+                                }
+                            }
+                        }
+                    } else if let Some(name_node) = node.child_by_field_name("name") {
+                        // Check local scope
+                        let name = &content[name_node.start_byte()..name_node.end_byte()];
+                        if decl
+                            .get(&(
+                                name.to_string(),
+                                SymbolKind::FunctionDefinition(FunctionDefinition::default()),
+                            ))
+                            .is_some()
+                        {
+                            println!("FOUND MEMBER");
+                            return local_scope.clone();
+                        } else {
+                            // Check local imports
+                            // Check package
+                            // Either scopes are not foun yer
+                            // or third party and will stay unresolved
+                            // regardless set unresolved to latter
+                            // resolve if applicable
+                        }
+                    }
+                }
+                Scope::default()
+            }
+            _ => Scope::default(),
+        }
+    }
+}
 #[derive(Error, Debug)]
 pub enum JavaError {
     #[error("{0}")]

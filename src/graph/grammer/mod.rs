@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind, Visibility,
-    build::Relationships,
-    symbol::{Generic, Language, SymbolId},
+    Modifier, SymbolKind, Visibility, build::{Relationships, ScopeIndexTable}, symbol::{Generic, Language, Scope, SymbolId},
 };
 
 /// The Grammer trait abstracts the query language tokens
@@ -16,7 +14,8 @@ pub(crate) trait Grammer {
     fn declaration_nodes(&self) -> &'static [&'static str];
     fn flatten_nodes(&self) -> &'static [&'static str];
     fn to_symbolkind(&self, node: &Node, content: &str) -> SymbolKind;
-    fn to_name<'a>(&self, node: &Node, content: &'a str) -> &'a str;
+    fn to_name(&self, node: &Node, content: &str) -> String;
+    fn to_scope(&self, node: &Node, content: &str) -> Scope;
     fn extract_declaration_attributes(
         &self,
         node: &Node,
@@ -38,6 +37,7 @@ pub(crate) trait Grammer {
         scoped_vis: &mut Option<Visibility>,
     ) {
     }
+
     fn extract_metadata(&self, node: &Node, content: &str, metadata: &mut HashMap<String, String>);
     fn pair_relationships(
         &self,
@@ -46,4 +46,5 @@ pub(crate) trait Grammer {
         child_id: SymbolId,
         relationships: &mut Relationships,
     );
+    fn try_resolve_scope(&self, node: &Node, content: &str, table: &mut ScopeIndexTable, local_scope: &Scope) -> Scope;
 }

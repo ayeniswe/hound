@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -10,12 +10,17 @@ use crate::graph::{
     SymbolKind, Visibility,
     grammer::Grammer,
     relationship::{Relationship, RelationshipKind, RelationshipTarget},
-    symbol::{Location, Symbol, SymbolId},
+    symbol::{Location, Scope, Symbol, SymbolId},
 };
 
 pub(crate) type SymbolMap = HashMap<SymbolId, Symbol>;
 pub(crate) type Relationships = Vec<Relationship>;
 
+#[derive(Default)]
+pub(crate) struct ScopeIndexTable {
+    pub(crate) unresolved: HashMap<String, SymbolId>,
+    pub(crate) index: HashMap<Scope, HashSet<(String, SymbolKind)>>,
+}
 pub(crate) struct SymbolData {
     pub(crate) tree: Tree,
     pub(crate) content: String,
@@ -51,8 +56,9 @@ pub(crate) fn build_symbols_and_relationships(
     file: &Path,
     relationships: &mut Relationships,
     symbols: &mut SymbolMap,
-    index: &mut HashMap<SymbolIndexKey, SymbolId>,
+    table: &mut ScopeIndexTable,
     default_visibility: &mut Option<Visibility>,
+    mut current_scope: Scope,
 ) -> Uuid {
     let mut symbol = Symbol::default();
     symbol.id = Uuid::new_v4();
@@ -64,29 +70,26 @@ pub(crate) fn build_symbols_and_relationships(
     symbol.kind = grammer.to_symbolkind(node, content);
 
     // MARK: GET SYMBOL NAME
-    symbol.name = if matches!(symbol.kind, SymbolKind::Module) {
-        file.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    } else {
-        grammer.to_name(node, content).to_string()
-    };
+    symbol.name = grammer.to_name(node, content).to_string();
 
-    // MARK: Handle index lookup to dedup
-    if let Some(id) = index.get(&(symbol.name.clone(), symbol.kind.clone())) {
-        let sym = symbols.get_mut(id).unwrap();
-        match sym.kind {
-            SymbolKind::FunctionCall => {
-                // Location can be differ so track all
-                sym.location.append(&mut symbol.location);
-            }
-            _ => (),
-        }
-        
-        return *id;
-    }
+    // MARK: GET SCOPE
+    symbol.scope = grammer.try_resolve_scope(node, content, table, &current_scope);
 
     if !matches!(symbol.kind, SymbolKind::Module) {
+        // MARK: Handle index lookup to dedup
+        // if let Some(id) = index.get(&(symbol.name.clone(), symbol.kind.clone())) {
+        //     let sym = symbols.get_mut(id).unwrap();
+        //     match sym.kind {
+        //         SymbolKind::FunctionCall => {
+        //             // Location can be differ so track all
+        //             sym.location.append(&mut symbol.location);
+        //         }
+        //         _ => (),
+        //     }
+
+        //     return *id;
+        // }
+
         // MARK: GET SYMBOL MODIFIERS
         let (v, m) = grammer.extract_declaration_attributes(node, content);
         if let Some(def) = default_visibility {
@@ -125,6 +128,16 @@ pub(crate) fn build_symbols_and_relationships(
         grammer.extract_metadata(node, content, &mut symbol.metadata);
     }
 
+    // MARK: STORE INDEX
+    if table.index.contains_key(&symbol.scope) {
+        let index = table.index.get_mut(&symbol.scope).unwrap();
+        index.insert((symbol.name.clone(), symbol.kind.clone()));
+    } else {
+        let mut index = HashSet::new();
+        index.insert((symbol.name.clone(), symbol.kind.clone()));
+        table.index.insert(symbol.scope.clone(), index);
+    }
+
     // GET CHILD DECLARATION
     collect_symbols_recursively(
         node,
@@ -134,12 +147,12 @@ pub(crate) fn build_symbols_and_relationships(
         content,
         relationships,
         symbols,
-        index,
+        table,
         default_visibility,
+        current_scope,
     );
 
     let id = symbol.id;
-    index.insert((symbol.name.clone(), symbol.kind.clone()), id);
     symbols.insert(id, symbol);
 
     id
@@ -153,10 +166,15 @@ fn collect_symbols_recursively(
     content: &str,
     relationships: &mut Relationships,
     symbols: &mut SymbolMap,
-    index: &mut HashMap<SymbolIndexKey, SymbolId>,
+    index_table: &mut ScopeIndexTable,
     default_visibility: &mut Option<Visibility>,
+    mut current_scope: Scope,
 ) {
     let mut scoped_visiblity = default_visibility;
+
+    current_scope
+        .scopes
+        .append(&mut grammer.to_scope(node, content).scopes);
     for child in node.children(&mut node.walk()) {
         if grammer.declaration_nodes().contains(&child.kind()) {
             let child_id = build_symbols_and_relationships(
@@ -166,8 +184,9 @@ fn collect_symbols_recursively(
                 file,
                 relationships,
                 symbols,
-                index,
+                index_table,
                 &mut scoped_visiblity,
+                current_scope.clone(),
             );
             grammer.pair_relationships(&child, parent_id, child_id, relationships);
         } else if grammer.flatten_nodes().contains(&child.kind()) {
@@ -181,8 +200,9 @@ fn collect_symbols_recursively(
                 content,
                 relationships,
                 symbols,
-                index,
+                index_table,
                 &mut scoped_visiblity,
+                current_scope.clone(),
             )
         } else {
             grammer.apply_visibility_change(&child, content, &mut scoped_visiblity)

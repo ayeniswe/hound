@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Add,
     path::PathBuf,
 };
 use tree_sitter::{Node, Point};
@@ -68,8 +69,7 @@ pub(crate) struct MemberVariable {
     pub(crate) dtype: Type,
 }
 
-
-#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, Debug)]
 pub(crate) enum SymbolKind {
     Destructor(String),
     Constructor(Constructor),
@@ -85,10 +85,22 @@ pub(crate) enum SymbolKind {
     FunctionCall,
 
     Module,
-    Namespace,
+    Import(Scope),
 
     #[default]
     Unknown,
+}
+impl PartialEq for SymbolKind {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+impl Eq for SymbolKind {}
+
+impl std::hash::Hash for SymbolKind {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -156,6 +168,11 @@ impl From<&str> for Modifier {
     }
 }
 
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Scope {
+    pub(crate) scopes: Vec<String>,
+    pub(crate) wildcard: bool,
+}
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Symbol {
     pub(crate) id: SymbolId,
@@ -173,7 +190,7 @@ pub(crate) struct Symbol {
     // Context
     pub(crate) visibility: Visibility,
     pub(crate) modifier: Vec<Modifier>,
-    pub(crate) scope: String,
+    pub(crate) scope: Scope,
 
     pub(crate) generics: Vec<Generic>,
 
