@@ -39,8 +39,11 @@ fn main() {
     let mut files = Vec::new();
     // files.append(&mut collect_source_files(Path::new("data/TMCI")).unwrap());
     // files.append(&mut collect_source_files(Path::new("data/TMDbAPI")).unwrap());
-    files.append(&mut collect_source_files(Path::new("data/demo/java/weapon")).unwrap());
-    files.append(&mut collect_source_files(Path::new("data/demo/java")).unwrap());
+    files.append(&mut collect_source_files(Path::new("data/demo/java/static_import")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/interface")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/interface_default")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/superclass")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/current")).unwrap());
     let g = Graph::create(files).unwrap();
 
     // Step 2. Prototpe 0 - UQL
@@ -56,9 +59,11 @@ fn main() {
         }),
     }));
 
-    // for sym in g.symbols() {
-    //     println!("SYMBOLS: {:?}", sym.1);
-    // }
+    for sym in g.symbols() {
+        if matches!(sym.1.kind, SymbolKind::FunctionCall) {
+            println!("SYMBOLS: {:?}", sym.1);
+        }
+    }
 
     // println!("RESULTS: {:?}", result);
 }

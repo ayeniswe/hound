@@ -68,20 +68,25 @@ fn extract_parameters(node: Option<Node>, source: &str) -> Vec<Parameter> {
         .collect()
 }
 
-fn extract_package_declaration(node: &Node, content: &str) -> Option<String> {
+fn extract_package_declaration(node: &Node, content: &str) -> Scope {
     if let Some(n) = node
         .named_children(&mut node.walk())
         .find(|n| n.kind() == "package_declaration")
     {
-        return Some(
-            content[n.start_byte()..n.end_byte()]
+        return Scope {
+            scopes: content[n.start_byte()..n.end_byte()]
                 .trim_start_matches("package")
                 .trim_end_matches(";")
                 .trim()
-                .to_string(),
-        );
+                .to_string()
+                .split(".")
+                .map(|x| x.to_string())
+                .collect(),
+            wildcard: bool::default(),
+            is_static: bool::default(),
+        };
     }
-    None
+    Scope::default()
 }
 fn extract_import_declaration(node: &Node, content: &str) -> Scope {
     let scopes: Vec<String> = content[node.start_byte()..node.end_byte()]
@@ -93,7 +98,12 @@ fn extract_import_declaration(node: &Node, content: &str) -> Scope {
         .map(|x| x.to_string())
         .collect();
     let wildcard = scopes.last().map_or("", |v| v) == "*";
-    Scope { scopes, wildcard }
+    let is_static = scopes.first().map_or("", |v| v).starts_with("static");
+    Scope {
+        scopes,
+        wildcard,
+        is_static,
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Java;
@@ -115,6 +125,7 @@ impl Grammer for Java {
     fn flatten_nodes(&self) -> &'static [&'static str] {
         &[
             "class_body",
+            "interface_body",
             "block",
             "return_statement",
             "expression_statement",
@@ -166,9 +177,9 @@ impl Grammer for Java {
                 params: extract_parameters(node.child_by_field_name("parameters"), content),
             }),
             "method_invocation" => SymbolKind::FunctionCall,
-            "class_declaration" => SymbolKind::Class,
+            "class_declaration" | "interface_declaration" => SymbolKind::Class,
             "import_declaration" => SymbolKind::Import(extract_import_declaration(node, content)),
-            "program" => SymbolKind::Module,
+            "program" => SymbolKind::Module(extract_package_declaration(node, content)),
             _ => SymbolKind::Unknown,
         }
     }
@@ -268,27 +279,19 @@ impl Grammer for Java {
     }
     fn to_scope(&self, node: &Node, content: &str) -> Scope {
         match node.kind() {
-            "program" => {
-                if let Some(pkg) = extract_package_declaration(node, content) {
-                    Scope {
-                        scopes: pkg.split(".").map(|x| x.to_string()).collect(),
-                        wildcard: false,
-                    }
-                } else {
-                    Scope::default()
-                }
-            }
-            "class_declaration" => Scope {
+            "class_declaration" | "interface_declaration" => Scope {
                 scopes: vec![self.to_name(node, content)],
-                wildcard: false,
+                wildcard: bool::default(),
+                is_static: bool::default(),
             },
+            "program" => extract_package_declaration(node, content),
             _ => Scope::default(),
         }
     }
 
     fn to_name(&self, node: &Node, content: &str) -> String {
         match node.kind() {
-            "program" => extract_package_declaration(node, content).unwrap_or_default(),
+            "program" => "program".into(),
             "import_declaration" => content[node.start_byte()..node.end_byte()]
                 .trim_start_matches("import")
                 .trim_end_matches(";")
@@ -349,30 +352,41 @@ impl Grammer for Java {
         content: &str,
         table: &mut ScopeIndexTable,
         local_scope: &Scope,
+        base_types: &mut Vec<String>,
+        local_imports: &mut Vec<Scope>,
     ) -> Scope {
         match node.kind() {
-            "program"
-            | "class_declaration"
-            | "record_declaration"
-            | "interface_declaration"
+            "record_declaration"
             | "field_declaration"
             | "constructor_declaration"
             | "method_declaration"
             | "enum_declaration" => local_scope.clone(),
-            "import_declaration" => {
-                println!("IMPORT: {}", node);
+            "class_declaration" | "interface_declaration" => {
+                // Base types are only resolved to class scope
+                base_types.clear();
+
                 local_scope.clone()
+            }
+            "program" => {
+                let scope = extract_package_declaration(node, content);
+                local_imports.push(scope.clone());
+                scope
+            }
+            "import_declaration" => {
+                // We need to track imports for ongoing resolution
+                let scope = extract_import_declaration(node, content);
+                local_imports.push(scope);
+                Scope::default()
             }
             "method_invocation" => {
                 if let Some(decl) = table.index.get(local_scope) {
-                    println!("HIT THE INDEX: YEP");
-                    println!("SCOPE: {:?}", local_scope);
-                    println!("NODE: {:?}", decl);
                     // Check if local scope has function defintion
-                    if let Some(field_node) = node.child_by_field_name("object") {
-                        let field_access = &content[field_node.start_byte()..field_node.end_byte()];
-                        let fields: Vec<&str> = field_access.split(".").collect();
-
+                    if let Some(fields) = node
+                        .child_by_field_name("object")
+                        .map(|n| &content[n.start_byte()..n.end_byte()])
+                        .filter(|v| !v.starts_with("this"))
+                        .map(|v| v.split(".").collect::<Vec<&str>>())
+                    {
                         // Find field declaration and resolve data type
                         let name = fields.first().unwrap();
                         if let Some((_, symbol)) = decl.get(&(
@@ -386,20 +400,29 @@ impl Grammer for Java {
                                 if let Some((_, _)) =
                                     decl.get(&(name.to_string(), SymbolKind::Class))
                                 {
-                                    println!("FOUND MEMBER");
+                                    println!("FOUND MEMBER - local scope");
                                     let mut scopes = local_scope.scopes.clone();
                                     scopes.push(name.to_string());
                                     return Scope {
                                         scopes,
-                                        wildcard: false,
+                                        wildcard: bool::default(),
+                                        is_static: bool::default(),
                                     };
                                 } else {
-                                    // Check local imports
-                                    // Check package
-                                    // Either scopes are not foun yer
-                                    // or third party and will stay unresolved
-                                    // regardless set unresolved to latter
-                                    // resolve if applicable
+                                    // Check local imports and package
+                                    for import in local_imports.as_slice() {
+                                        if let Some(import_decl) = table.index.get(import) {
+                                            if let Some(_) = import_decl
+                                                .get(&(name.to_string(), SymbolKind::Class))
+                                            {
+                                                println!("FOUND MEMBER - local package/imports");
+                                                return import.clone();
+                                            }
+                                        }
+                                    }
+
+                                    // Resolve latter
+                                    local_imports.push(local_scope.clone());
                                 }
                             }
                         }
@@ -413,19 +436,99 @@ impl Grammer for Java {
                             ))
                             .is_some()
                         {
-                            println!("FOUND MEMBER");
+                            println!("FOUND MEMBER - local scope");
                             return local_scope.clone();
                         } else {
-                            // Check local imports
-                            // Check package
-                            // Either scopes are not foun yer
-                            // or third party and will stay unresolved
-                            // regardless set unresolved to latter
-                            // resolve if applicable
+                            // Check subclasses and interfaces
+                            let imports = local_imports.clone();
+                            for (idx, import) in imports.iter().enumerate() {
+                                let is_package = idx == 0;
+                                for base_type in base_types.as_slice() {
+                                    // Only check imports that are valid
+                                    if is_package
+                                        || import.wildcard
+                                        || import.scopes.last() == Some(base_type)
+                                    {
+                                        let scope = if is_package {
+                                            let mut scopes = import.scopes.clone();
+                                            scopes.push(base_type.clone());
+                                            Scope {
+                                                scopes,
+                                                wildcard: bool::default(),
+                                                is_static: bool::default(),
+                                            }
+                                        } else if import.wildcard {
+                                            let mut scopes = import.scopes.clone();
+                                            scopes.pop(); // remove wildcard bit
+                                            scopes.push(base_type.clone());
+                                            Scope {
+                                                scopes,
+                                                wildcard: bool::default(),
+                                                is_static: bool::default(),
+                                            }
+                                        } else {
+                                            import.clone()
+                                        };
+
+                                        if let Some(import_decl) = table.index.get(import) {
+                                            if import_decl
+                                                .get(&(base_type.to_string(), SymbolKind::Class))
+                                                .is_some()
+                                            {
+                                                println!("FOUND MEMBER - base type");
+                                                return scope;
+                                            }
+                                        }
+
+                                        local_imports.push(scope.clone());
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Check local imports and package
+                            for import in local_imports.as_slice() {
+                                if let Some(import_decl) = table.index.get(import) {
+                                    if import_decl
+                                        .get(&(
+                                            name.to_string(),
+                                            SymbolKind::FunctionDefinition(
+                                                FunctionDefinition::default(),
+                                            ),
+                                        ))
+                                        .is_some()
+                                    {
+                                        println!("FOUND MEMBER - local package/imports");
+                                        return import.clone();
+                                    }
+                                }
+                            }
+
+                            // Resolve latter
+                            local_imports.push(local_scope.clone());
                         }
                     }
                 }
                 Scope::default()
+                // resolveMethodCall("beam")
+                // │
+                // ├── methods available on current `this`
+                // │   ├── current class X
+                // │   ├── superclass X
+                // │   └── interfaces X
+                // │
+                // └── static imports
+                //     ├── explicit static import
+                //     └── static wildcard import
+                //
+                // resolveType("A")
+                // │
+                // ├── local/nested types
+                // ├── current package
+                // ├── explicit imports
+                // ├── wildcard imports
+                // └── java.lang
             }
             _ => Scope::default(),
         }

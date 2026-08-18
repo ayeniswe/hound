@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind, Visibility, build::{Relationships, ScopeIndexTable}, symbol::{Generic, Language, Scope, SymbolId},
+    Modifier, SymbolKind, Visibility,
+    build::{Relationships, ScopeIndexTable},
+    symbol::{Generic, Language, Scope, SymbolId},
 };
 
 /// The Grammer trait abstracts the query language tokens
@@ -46,5 +48,13 @@ pub(crate) trait Grammer {
         child_id: SymbolId,
         relationships: &mut Relationships,
     );
-    fn try_resolve_scope(&self, node: &Node, content: &str, table: &mut ScopeIndexTable, local_scope: &Scope) -> Scope;
+    fn try_resolve_scope(
+        &self,
+        node: &Node,
+        content: &str,
+        table: &mut ScopeIndexTable,
+        local_scope: &Scope,
+        base_types: &mut Vec<String>,
+        local_imports: &mut Vec<Scope>,
+    ) -> Scope;
 }

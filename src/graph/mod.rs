@@ -22,8 +22,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::graph::build::Relationships;
-use crate::graph::build::SymbolMap;
 use crate::graph::build::ScopeIndexTable;
+use crate::graph::build::SymbolMap;
 use crate::graph::build::build_symbols_and_relationships;
 use crate::graph::grammer::cpp::{Cpp, CppError};
 use crate::graph::grammer::java::{Java, JavaError};
@@ -68,7 +68,9 @@ impl Graph {
                 &mut symbols,
                 &mut index_table,
                 &mut None,
-            Scope::default()
+                Scope::default(),
+                &mut Vec::new(),
+                &mut Vec::new(),
             );
         }
 

@@ -84,7 +84,7 @@ pub(crate) enum SymbolKind {
     MemberVariable(MemberVariable),
     FunctionCall,
 
-    Module,
+    Module(Scope),
     Import(Scope),
 
     #[default]
@@ -172,6 +172,7 @@ impl From<&str> for Modifier {
 pub(crate) struct Scope {
     pub(crate) scopes: Vec<String>,
     pub(crate) wildcard: bool,
+    pub(crate) is_static: bool,
 }
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Symbol {

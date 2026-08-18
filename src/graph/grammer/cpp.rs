@@ -1,10 +1,17 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use thiserror::Error;
 use tree_sitter::Node;
 
 use crate::graph::{
-    Modifier, SymbolKind, Visibility, build::{Relationships, ScopeIndexTable}, grammer::Grammer, parser::LanguageParser, relationship::{Relationship, RelationshipKind, RelationshipTarget}, symbol::{FunctionDefinition, Generic, Language, MemberVariable, Parameter, Scope, SymbolId, Type},
+    Modifier, SymbolKind, Visibility,
+    build::{Relationships, ScopeIndexTable},
+    grammer::Grammer,
+    parser::LanguageParser,
+    relationship::{Relationship, RelationshipKind, RelationshipTarget},
+    symbol::{
+        FunctionDefinition, Generic, Language, MemberVariable, Parameter, Scope, SymbolId, Type,
+    },
 };
 
 fn sanitize_template_names(value: &str) -> &str {
@@ -213,7 +220,7 @@ impl Grammer for Cpp {
             "class_specifier" => SymbolKind::Class,
             "struct_specifier" => SymbolKind::Struct,
             "enum_specifier" => SymbolKind::Enum,
-            "translation_unit" => SymbolKind::Module,
+            "translation_unit" => SymbolKind::Module(Scope::default()),
             "call_expression" => SymbolKind::FunctionCall,
             _ => {
                 // Function definition and member fields are very simliar so we must
@@ -348,7 +355,7 @@ impl Grammer for Cpp {
     }
 
     fn to_scope(&self, node: &Node, content: &str) -> Scope {
-        // TODO impl 
+        // TODO impl
         Scope::default()
     }
 
@@ -408,11 +415,18 @@ impl Grammer for Cpp {
             metadata: HashMap::new(),
         })
     }
-    
-    fn try_resolve_scope(&self, node: &Node, content: &str, table: &mut ScopeIndexTable, local_scope: &Scope) -> Scope {
+
+    fn try_resolve_scope(
+        &self,
+        node: &Node,
+        content: &str,
+        table: &mut ScopeIndexTable,
+        local_scope: &Scope,
+        base_types: &mut Vec<String>,
+        local_imports: &mut Vec<Scope>,
+    ) -> Scope {
         todo!()
     }
-
 }
 
 #[derive(Error, Debug)]
