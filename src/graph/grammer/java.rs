@@ -83,13 +83,12 @@ fn extract_package_declaration(node: &Node, content: &str) -> Scope {
                 .map(|x| x.to_string())
                 .collect(),
             wildcard: bool::default(),
-            is_static: bool::default(),
         };
     }
     Scope::default()
 }
 fn extract_import_declaration(node: &Node, content: &str) -> Scope {
-    let scopes: Vec<String> = content[node.start_byte()..node.end_byte()]
+    let mut scopes: Vec<String> = content[node.start_byte()..node.end_byte()]
         .trim_start_matches("import")
         .trim_end_matches(";")
         .trim()
@@ -99,11 +98,16 @@ fn extract_import_declaration(node: &Node, content: &str) -> Scope {
         .collect();
     let wildcard = scopes.last().map_or("", |v| v) == "*";
     let is_static = scopes.first().map_or("", |v| v).starts_with("static");
-    Scope {
-        scopes,
-        wildcard,
-        is_static,
+    if let Some(c) = scopes.first_mut() {
+        if let Some(s) = c.strip_prefix("static") {
+            *c = s.trim().to_string();
+        }
     }
+    // Lookup to function properly requires no static method ending
+    if is_static {
+        scopes.pop();
+    }
+    Scope { scopes, wildcard }
 }
 #[derive(Clone)]
 pub(crate) struct Java;
@@ -177,7 +181,8 @@ impl Grammer for Java {
                 params: extract_parameters(node.child_by_field_name("parameters"), content),
             }),
             "method_invocation" => SymbolKind::FunctionCall,
-            "class_declaration" | "interface_declaration" => SymbolKind::Class,
+            "class_declaration" => SymbolKind::Class,
+            "interface_declaration" => SymbolKind::Interface,
             "import_declaration" => SymbolKind::Import(extract_import_declaration(node, content)),
             "program" => SymbolKind::Module(extract_package_declaration(node, content)),
             _ => SymbolKind::Unknown,
@@ -282,7 +287,6 @@ impl Grammer for Java {
             "class_declaration" | "interface_declaration" => Scope {
                 scopes: vec![self.to_name(node, content)],
                 wildcard: bool::default(),
-                is_static: bool::default(),
             },
             "program" => extract_package_declaration(node, content),
             _ => Scope::default(),
@@ -397,8 +401,8 @@ impl Grammer for Java {
                             if let SymbolKind::MemberVariable(mem) = symbol {
                                 let name = &mem.dtype.name;
                                 // Check local scope
-                                if let Some((_, _)) =
-                                    decl.get(&(name.to_string(), SymbolKind::Class))
+                                if decl.contains(&(name.to_string(), SymbolKind::Class))
+                                    || decl.contains(&(name.to_string(), SymbolKind::Interface))
                                 {
                                     println!("FOUND MEMBER - local scope");
                                     let mut scopes = local_scope.scopes.clone();
@@ -406,14 +410,17 @@ impl Grammer for Java {
                                     return Scope {
                                         scopes,
                                         wildcard: bool::default(),
-                                        is_static: bool::default(),
                                     };
                                 } else {
                                     // Check local imports and package
                                     for import in local_imports.as_slice() {
                                         if let Some(import_decl) = table.index.get(import) {
-                                            if let Some(_) = import_decl
-                                                .get(&(name.to_string(), SymbolKind::Class))
+                                            if import_decl
+                                                .contains(&(name.to_string(), SymbolKind::Class))
+                                                || import_decl.contains(&(
+                                                    name.to_string(),
+                                                    SymbolKind::Interface,
+                                                ))
                                             {
                                                 println!("FOUND MEMBER - local package/imports");
                                                 return import.clone();
@@ -455,7 +462,6 @@ impl Grammer for Java {
                                             Scope {
                                                 scopes,
                                                 wildcard: bool::default(),
-                                                is_static: bool::default(),
                                             }
                                         } else if import.wildcard {
                                             let mut scopes = import.scopes.clone();
@@ -464,17 +470,19 @@ impl Grammer for Java {
                                             Scope {
                                                 scopes,
                                                 wildcard: bool::default(),
-                                                is_static: bool::default(),
                                             }
                                         } else {
                                             import.clone()
                                         };
 
                                         if let Some(import_decl) = table.index.get(import) {
-                                            if import_decl
-                                                .get(&(base_type.to_string(), SymbolKind::Class))
-                                                .is_some()
-                                            {
+                                            if import_decl.contains(&(
+                                                base_type.to_string(),
+                                                SymbolKind::Class,
+                                            )) || import_decl.contains(&(
+                                                base_type.to_string(),
+                                                SymbolKind::Interface,
+                                            )) {
                                                 println!("FOUND MEMBER - base type");
                                                 return scope;
                                             }
@@ -488,7 +496,7 @@ impl Grammer for Java {
                             }
 
                             // Check local imports and package
-                            for import in local_imports.as_slice() {
+                            for import in imports.as_slice() {
                                 if let Some(import_decl) = table.index.get(import) {
                                     if import_decl
                                         .get(&(
@@ -519,7 +527,7 @@ impl Grammer for Java {
                 // │   └── interfaces X
                 // │
                 // └── static imports
-                //     ├── explicit static import
+                //     ├── explicit static import X
                 //     └── static wildcard import
                 //
                 // resolveType("A")

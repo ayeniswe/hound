@@ -39,7 +39,9 @@ fn main() {
     let mut files = Vec::new();
     // files.append(&mut collect_source_files(Path::new("data/TMCI")).unwrap());
     // files.append(&mut collect_source_files(Path::new("data/TMDbAPI")).unwrap());
-    files.append(&mut collect_source_files(Path::new("data/demo/java/static_import")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/precendence")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/wildcard_import")).unwrap());
+    // files.append(&mut collect_source_files(Path::new("data/demo/java/static_import")).unwrap());
     // files.append(&mut collect_source_files(Path::new("data/demo/java/interface")).unwrap());
     // files.append(&mut collect_source_files(Path::new("data/demo/java/interface_default")).unwrap());
     // files.append(&mut collect_source_files(Path::new("data/demo/java/superclass")).unwrap());

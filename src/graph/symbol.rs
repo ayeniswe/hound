@@ -168,11 +168,22 @@ impl From<&str> for Modifier {
     }
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct Scope {
     pub(crate) scopes: Vec<String>,
     pub(crate) wildcard: bool,
-    pub(crate) is_static: bool,
+}
+impl PartialEq for Scope {
+    fn eq(&self, other: &Self) -> bool {
+        self.scopes == other.scopes
+    }
+}
+impl Eq for Scope {}
+
+impl std::hash::Hash for Scope {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.scopes.hash(state)
+    }
 }
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Symbol {
