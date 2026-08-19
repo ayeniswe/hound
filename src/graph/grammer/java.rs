@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 use tree_sitter::Node;
@@ -7,7 +7,7 @@ use crate::graph::{
     Modifier,
     SymbolKind::{self},
     Visibility,
-    build::{Relationships, ScopeIndexTable, handle_query},
+    build::{Relationships, ScopeIndexTable, SymbolKey, handle_query},
     grammer::Grammer,
     parser::LanguageParser,
     relationship::{Relationship, RelationshipKind, RelationshipTarget},
@@ -384,138 +384,65 @@ impl Grammer for Java {
             }
             "method_invocation" => {
                 if let Some(decl) = table.index.get(local_scope) {
-                    // Check if local scope has function defintion
                     if let Some(fields) = node
                         .child_by_field_name("object")
                         .map(|n| &content[n.start_byte()..n.end_byte()])
                         .filter(|v| !v.starts_with("this"))
-                        .map(|v| v.split(".").collect::<Vec<&str>>())
+                        .map(|v| v.split('.').collect::<Vec<_>>())
                     {
-                        // Find field declaration and resolve data type
                         let name = fields.first().unwrap();
-                        if let Some((_, symbol)) = decl.get(&(
-                            name.to_string(),
-                            SymbolKind::MemberVariable(MemberVariable::default()),
-                        )) {
-                            // Use symbol info find path to resolution
-                            if let SymbolKind::MemberVariable(mem) = symbol {
-                                let name = &mem.dtype.name;
-                                // Check local scope
-                                if decl.contains(&(name.to_string(), SymbolKind::Class))
-                                    || decl.contains(&(name.to_string(), SymbolKind::Interface))
-                                {
-                                    println!("FOUND MEMBER - local scope");
-                                    let mut scopes = local_scope.scopes.clone();
-                                    scopes.push(name.to_string());
-                                    return Scope {
-                                        scopes,
-                                        wildcard: bool::default(),
-                                    };
-                                } else {
-                                    // Check local imports and package
-                                    for import in local_imports.as_slice() {
-                                        if let Some(import_decl) = table.index.get(import) {
-                                            if import_decl
-                                                .contains(&(name.to_string(), SymbolKind::Class))
-                                                || import_decl.contains(&(
-                                                    name.to_string(),
-                                                    SymbolKind::Interface,
-                                                ))
-                                            {
-                                                println!("FOUND MEMBER - local package/imports");
-                                                return import.clone();
-                                            }
-                                        }
-                                    }
 
-                                    // Resolve latter
-                                    local_imports.push(local_scope.clone());
-                                }
-                            }
-                        }
-                    } else if let Some(name_node) = node.child_by_field_name("name") {
-                        // Check local scope
-                        let name = &content[name_node.start_byte()..name_node.end_byte()];
-                        if decl
-                            .get(&(
-                                name.to_string(),
-                                SymbolKind::FunctionDefinition(FunctionDefinition::default()),
-                            ))
-                            .is_some()
-                        {
-                            println!("FOUND MEMBER - local scope");
-                            return local_scope.clone();
-                        } else {
-                            // Check subclasses and interfaces
-                            let imports = local_imports.clone();
-                            for (idx, import) in imports.iter().enumerate() {
-                                let is_package = idx == 0;
-                                for base_type in base_types.as_slice() {
-                                    // Only check imports that are valid
-                                    if is_package
-                                        || import.wildcard
-                                        || import.scopes.last() == Some(base_type)
-                                    {
-                                        let scope = if is_package {
-                                            let mut scopes = import.scopes.clone();
-                                            scopes.push(base_type.clone());
-                                            Scope {
-                                                scopes,
-                                                wildcard: bool::default(),
-                                            }
-                                        } else if import.wildcard {
-                                            let mut scopes = import.scopes.clone();
-                                            scopes.pop(); // remove wildcard bit
-                                            scopes.push(base_type.clone());
-                                            Scope {
-                                                scopes,
-                                                wildcard: bool::default(),
-                                            }
-                                        } else {
-                                            import.clone()
-                                        };
+                        if let Some(member) = get_member(decl, name) {
+                            let name = &member.dtype.name;
 
-                                        if let Some(import_decl) = table.index.get(import) {
-                                            if import_decl.contains(&(
-                                                base_type.to_string(),
-                                                SymbolKind::Class,
-                                            )) || import_decl.contains(&(
-                                                base_type.to_string(),
-                                                SymbolKind::Interface,
-                                            )) {
-                                                println!("FOUND MEMBER - base type");
-                                                return scope;
-                                            }
-                                        }
+                            // Local scope
+                            if contains_type(decl, name) {
+                                println!("FOUND MEMBER - local scope");
 
-                                        local_imports.push(scope.clone());
-                                    } else {
-                                        continue;
-                                    }
-                                }
+                                let mut scopes = local_scope.scopes.clone();
+                                scopes.push(name.to_string());
+
+                                return Scope {
+                                    scopes,
+                                    wildcard: false,
+                                };
                             }
 
-                            // Check local imports and package
-                            for import in imports.as_slice() {
-                                if let Some(import_decl) = table.index.get(import) {
-                                    if import_decl
-                                        .get(&(
-                                            name.to_string(),
-                                            SymbolKind::FunctionDefinition(
-                                                FunctionDefinition::default(),
-                                            ),
-                                        ))
-                                        .is_some()
-                                    {
-                                        println!("FOUND MEMBER - local package/imports");
-                                        return import.clone();
-                                    }
-                                }
+                            // Imports
+                            if let Some(scope) = find_type_in_imports(table, local_imports, name) {
+                                println!("FOUND MEMBER - local package/imports");
+                                return scope;
                             }
 
-                            // Resolve latter
                             local_imports.push(local_scope.clone());
                         }
+                    } else if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = &content[name_node.start_byte()..name_node.end_byte()];
+
+                        // Check local scope
+                        if contains_function(decl, name) {
+                            println!("FOUND MEMBER - local scope");
+                            return local_scope.clone();
+                        }
+
+                        // Check subclasses and interfaces
+                        let imports = local_imports.clone();
+
+                        let (base_scope, discovered) = find_base_type(table, &imports, base_types);
+
+                        local_imports.extend(discovered);
+
+                        if let Some(scope) = base_scope {
+                            println!("FOUND MEMBER - base type");
+                            return scope;
+                        }
+
+                        if let Some(scope) = find_function_in_imports(table, &imports, name) {
+                            println!("FOUND MEMBER - local package/imports");
+                            return scope;
+                        }
+
+                        local_imports.push(local_scope.clone());
                     }
                 }
                 Scope::default()
@@ -528,7 +455,7 @@ impl Grammer for Java {
                 // │
                 // └── static imports
                 //     ├── explicit static import X
-                //     └── static wildcard import
+                //     └── static wildcard import X
                 //
                 // resolveType("A")
                 // │
@@ -542,6 +469,108 @@ impl Grammer for Java {
         }
     }
 }
+
+fn contains_type(decl: &HashSet<SymbolKey>, name: &str) -> bool {
+    decl.contains(&(name.to_string(), SymbolKind::Class))
+        || decl.contains(&(name.to_string(), SymbolKind::Interface))
+}
+
+fn contains_function(decl: &HashSet<SymbolKey>, name: &str) -> bool {
+    decl.contains(&(
+        name.to_string(),
+        SymbolKind::FunctionDefinition(FunctionDefinition::default()),
+    ))
+}
+
+fn get_member<'a>(decl: &'a HashSet<SymbolKey>, name: &str) -> Option<&'a MemberVariable> {
+    match decl.get(&(
+        name.to_string(),
+        SymbolKind::MemberVariable(MemberVariable::default()),
+    )) {
+        Some((_, SymbolKind::MemberVariable(member))) => Some(member),
+        _ => None,
+    }
+}
+
+fn find_type_in_imports(table: &ScopeIndexTable, imports: &[Scope], name: &str) -> Option<Scope> {
+    for import in imports {
+        if let Some(decl) = table.index.get(import) {
+            if contains_type(decl, name) {
+                return Some(import.clone());
+            }
+        }
+    }
+
+    None
+}
+fn find_base_type(
+    table: &ScopeIndexTable,
+    imports: &[Scope],
+    base_types: &[String],
+) -> (Option<Scope>, Vec<Scope>) {
+    let mut discovered = Vec::new();
+
+    for (idx, import) in imports.iter().enumerate() {
+        let is_package = idx == 0;
+
+        for base_type in base_types {
+            if !(is_package || import.wildcard || import.scopes.last() == Some(base_type)) {
+                continue;
+            }
+
+            let scope = if is_package {
+                let mut scopes = import.scopes.clone();
+                scopes.push(base_type.clone());
+
+                Scope {
+                    scopes,
+                    wildcard: false,
+                }
+            } else if import.wildcard {
+                let mut scopes = import.scopes.clone();
+                scopes.pop();
+                scopes.push(base_type.clone());
+
+                Scope {
+                    scopes,
+                    wildcard: false,
+                }
+            } else {
+                import.clone()
+            };
+
+            if let Some(decl) = table.index.get(import) {
+                if contains_type(decl, base_type) {
+                    return (Some(scope), discovered);
+                }
+            }
+
+            discovered.push(scope);
+        }
+    }
+
+    (None, discovered)
+}
+
+fn find_function_in_imports(
+    table: &ScopeIndexTable,
+    imports: &[Scope],
+    name: &str,
+) -> Option<Scope> {
+    for import in imports {
+        if let Some(import_decl) = table.index.get(import) {
+            if import_decl.contains(&(
+                name.to_string(),
+                SymbolKind::FunctionDefinition(FunctionDefinition::default()),
+            )) {
+                return Some(import.clone());
+            }
+        }
+    }
+
+    None
+}
+
 #[derive(Error, Debug)]
 pub enum JavaError {
     #[error("{0}")]

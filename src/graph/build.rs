@@ -17,7 +17,7 @@ use crate::graph::{
 pub(crate) type SymbolMap = HashMap<SymbolId, Symbol>;
 pub(crate) type Relationships = Vec<Relationship>;
 
-type SymbolKey = (String, SymbolKind);
+pub(crate) type SymbolKey = (String, SymbolKind);
 type AllowedScopes = Vec<Scope>;
 #[derive(Default)]
 pub(crate) struct ScopeIndexTable {
