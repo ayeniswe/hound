@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug)]
 struct CallGraph {
@@ -58,11 +58,89 @@ impl CallGraph {
             .map(|g| g.into_iter().cloned().collect())
             .unwrap_or_default()
     }
+    fn get_all_callers(&self, callee: &str) -> HashMap<String, usize> {
+        let mut visited = HashMap::from([(callee.to_string(), 0usize)]); // D, C1, B2, A3, E3
+        let mut queue: VecDeque<&str> = VecDeque::from([callee]); // D, C, B, AE
+
+        while !queue.is_empty() {
+            if let Some(method) = queue.pop_front() {
+                if let Some(callers) = self.callees.get(method) {
+                    let next_depth = visited[method] + 1;
+                    for caller in callers {
+                        // Prevent cycles by not revisiting seen edges
+                        if !visited.contains_key(caller) {
+                            visited.insert(caller.clone(), next_depth);
+                            queue.push_back(caller);
+                        }
+                    }
+                }
+            }
+        }
+
+        visited.remove(callee);
+        visited
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use crate::callgraph::CallGraph;
+
+    #[test]
+    fn test_retrive_all_caller() {
+        // Test 1. Graph with a cycle
+        let mut graph = CallGraph::new();
+
+        graph.add_call("A", "B");
+        graph.add_call("B", "C");
+        graph.add_call("C", "D");
+        graph.add_call("E", "B");
+        graph.add_call("D", "B");
+
+        assert_eq!(
+            graph.get_all_callers("D"),
+            HashMap::from([
+                ("A".into(), 3),
+                ("C".into(), 1),
+                ("B".into(), 2),
+                ("E".into(), 3)
+            ])
+        );
+
+        // Test 2. Multi path enqueue
+        let mut graph = CallGraph::new();
+
+        graph.add_call("A", "B");
+        graph.add_call("A", "C");
+        graph.add_call("B", "D");
+        graph.add_call("C", "D");
+
+        assert_eq!(
+            graph.get_all_callers("D"),
+            HashMap::from([("A".into(), 2), ("B".into(), 1), ("C".into(), 1)])
+        );
+
+        // Test 3. Level depth 
+        let mut graph = CallGraph::new();
+
+        graph.add_call("A", "B");
+        graph.add_call("B", "D");
+        graph.add_call("C", "D");
+        graph.add_call("E", "C");
+
+        assert_eq!(
+            graph.get_all_callers("D"),
+            HashMap::from([
+                ("A".into(), 2),
+                ("C".into(), 1),
+                ("B".into(), 1),
+                ("E".into(), 2)
+            ])
+        );
+
+    }
 
     #[test]
     fn test_method_removal() {
