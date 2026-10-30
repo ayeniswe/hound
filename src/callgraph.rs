@@ -61,7 +61,6 @@ impl CallGraph {
                 }
             }
         }
-        // The call graph but doesn't remove the method from file_index.
     }
     fn get_callers(&self, callee: &str) -> Vec<String> {
         self.callees
