@@ -48,8 +48,10 @@ impl CallGraph {
             }
         }
     }
-    fn remove_method(&mut self, method: &str) {
-        self.file_index.remove(method);
+    fn remove_method(&mut self, filename: &str, method: &str) {
+        if let Some(callers) = self.file_index.get_mut(filename) {
+            callers.remove(method);
+        }
         self.remove_outgoing_edges(method);
         // Remove incoming methods relationships
         if let Some(edges) = self.callees.remove(method) {
@@ -205,7 +207,7 @@ mod test {
         c.add_call("C", "B");
         c.add_call("D", "B");
 
-        c.remove_method("B");
+        c.remove_method("", "B");
         assert!(c.callees.get("B").is_none());
         assert!(c.callers.get("D").unwrap().is_empty());
         assert!(c.callers.get("A").unwrap().is_empty());
@@ -216,7 +218,7 @@ mod test {
         c.add_call("A", "B");
         c.add_call("B", "A");
 
-        c.remove_method("A");
+        c.remove_method("","A");
         assert!(c.callers.get("B").unwrap().is_empty());
         assert!(c.callers.get("A").is_none());
 
@@ -224,7 +226,7 @@ mod test {
         c.add_call("A", "C");
         c.add_call("A", "B");
 
-        c.remove_method("D");
+        c.remove_method("","D");
         assert!(c.callers.get("A").unwrap().get("C").is_some());
         assert!(c.callers.get("A").unwrap().get("B").is_some());
         assert!(c.callees.get("C").unwrap().get("A").is_some());
