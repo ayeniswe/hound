@@ -2,8 +2,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug)]
 struct CallGraph {
+    /// The methods that are called on by other mehtods
+    ///
+    /// `B <- called by A`
     callees: HashMap<String, HashSet<String>>,
+    /// The methods that call other methods
+    ///
+    ///  `A -> calls B`
     callers: HashMap<String, HashSet<String>>,
+    /// All methods contained in a file
+    file_index: HashMap<String, HashSet<String>>,
 }
 
 impl CallGraph {
@@ -11,6 +19,7 @@ impl CallGraph {
         CallGraph {
             callees: HashMap::new(),
             callers: HashMap::new(),
+            file_index: HashMap::new(),
         }
     }
     fn add_call(&mut self, caller: &str, callee: &str) {
@@ -30,7 +39,7 @@ impl CallGraph {
             callers.remove(caller);
         }
     }
-    fn remove_method(&mut self, method: &str) {
+    fn remove_outgoing_edges(&mut self, method: &str) {
         if let Some(edges) = self.callers.remove(method) {
             for edge in edges {
                 if let Some(neighbors) = self.callees.get_mut(&edge) {
@@ -38,6 +47,11 @@ impl CallGraph {
                 }
             }
         }
+    }
+    fn remove_method(&mut self, method: &str) {
+        self.file_index.remove(method);
+        self.remove_outgoing_edges(method);
+        // Remove incoming methods relationships
         if let Some(edges) = self.callees.remove(method) {
             for edge in edges {
                 if let Some(neighbors) = self.callers.get_mut(&edge) {
@@ -45,6 +59,7 @@ impl CallGraph {
                 }
             }
         }
+        // The call graph but doesn't remove the method from file_index.
     }
     fn get_callers(&self, callee: &str) -> Vec<String> {
         self.callees
@@ -80,6 +95,23 @@ impl CallGraph {
         visited.remove(callee);
         visited
     }
+    fn upsert_file_calls(&mut self, file: &str, calls: &[(&str, &str)]) {
+        // Clear out outgoing calls because we dont
+        // want to mess up any calls that rely on these
+        // methods
+        let mut methods = self.file_index.remove(file).unwrap_or_default();
+        // Perf issues not O(len)
+        for method in methods.drain() {
+            self.remove_outgoing_edges(&method);
+        }
+
+        for (caller, callee) in calls {
+            methods.insert(caller.to_string());
+            self.add_call(caller, callee);
+        }
+
+        self.file_index.insert(file.into(), methods);
+    }
 }
 
 #[cfg(test)]
@@ -87,7 +119,31 @@ mod test {
     use std::collections::HashMap;
 
     use crate::callgraph::CallGraph;
+    #[test]
+    fn test_file_calls_upsert() {
+        let mut graph = CallGraph::new();
+        // Test 1. Update file calls
+        graph.upsert_file_calls(
+            "Service.java",
+            &[
+                ("Service.save", "Repository.insert"),
+                ("Service.save", "Logger.info"),
+            ],
+        );
+        graph.upsert_file_calls("Controller.java", &[("Controller.create", "Service.save")]);
+        graph.upsert_file_calls("Service.java", &[("Service.save", "Repository.update")]);
 
+        assert!(graph.get_callers("Repository.insert").is_empty());
+        assert!(graph.get_callers("Logger.info").is_empty());
+        assert_eq!(graph.get_callers("Repository.update"), vec!["Service.save"]);
+        assert_eq!(graph.get_callers("Service.save"), vec!["Controller.create"]);
+
+        // Test 2. Clear stale data
+        graph.upsert_file_calls("Service.java", &[]);
+
+        assert!(graph.get_callees("Service.save").is_empty());
+        assert_eq!(graph.get_callers("Service.save"), vec!["Controller.create"]);
+    }
     #[test]
     fn test_retrive_all_caller() {
         // Test 1. Graph with a cycle
@@ -122,7 +178,7 @@ mod test {
             HashMap::from([("A".into(), 2), ("B".into(), 1), ("C".into(), 1)])
         );
 
-        // Test 3. Level depth 
+        // Test 3. Level depth
         let mut graph = CallGraph::new();
 
         graph.add_call("A", "B");
@@ -139,7 +195,6 @@ mod test {
                 ("E".into(), 2)
             ])
         );
-
     }
 
     #[test]
